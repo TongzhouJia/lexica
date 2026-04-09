@@ -1,0 +1,18 @@
+# 忽略 IDE 配置文件
+.idea/
+
+# 忽略当前目录的输出文件（如果在当前目录运行）
+data/tts_downloader/word_audios/
+*.mp3
+
+# 忽略环境变量/机密文件（切勿提交！）
+.env
+
+# 忽略编译后的二进制文件
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
