@@ -93,6 +93,10 @@ func main() {
 	rawWords := reSplit.Split(content, -1)
 
 	var validWords []string
+	var invalidWords []string
+	// 正则：只允许字母(a-z, A-Z)、空格(\s)和连字符(-)
+	validWordRegex := regexp.MustCompile(`^[a-zA-Z\s\-]+$`)
+
 	for _, w := range rawWords {
 		w = strings.TrimSpace(w)
 		if len(w) == 0 {
@@ -102,7 +106,23 @@ func main() {
 		if len(w) == 1 && w >= "A" && w <= "Z" {
 			continue
 		}
-		validWords = append(validWords, w)
+
+		// 判断是否是正经单词
+		if !validWordRegex.MatchString(w) {
+			invalidWords = append(invalidWords, w)
+		} else {
+			validWords = append(validWords, w)
+		}
+	}
+
+	// 如果发现有问题的单词，列出并结束程序
+	if len(invalidWords) > 0 {
+		fmt.Printf("❌ 扫描到 %d 个不合法的单词（包含非法字符如 '/' 等）:\n", len(invalidWords))
+		for _, w := range invalidWords {
+			fmt.Printf("  - %s\n", w)
+		}
+		fmt.Println("请修正这些单词后再重新运行程序。")
+		return
 	}
 
 	fmt.Printf("提取完毕！一共找到 %d 个有效单词。\n", len(validWords))
