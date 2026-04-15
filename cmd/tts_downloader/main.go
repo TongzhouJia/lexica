@@ -161,8 +161,8 @@ func main() {
 				// 组装请求数据
 				reqData := TTSRequest{}
 				reqData.Input.Text = word
-				reqData.Voice.LanguageCode = "en-US"
-				reqData.Voice.Name = "en-US-Neural2-F"
+				reqData.Voice.LanguageCode = "en-AU"   // 修改为澳洲英语
+				reqData.Voice.Name = "en-AU-Neural2-C" // 澳洲口音最贵的一档（女声，如需男声可改为 en-AU-Neural2-B）
 				reqData.AudioConfig.AudioEncoding = "MP3"
 
 				jsonData, _ := json.Marshal(reqData)
