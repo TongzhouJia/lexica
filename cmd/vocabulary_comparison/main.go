@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/google/generative-ai-go/genai"
 	"google.golang.org/api/option"
@@ -165,6 +166,7 @@ func loadVocab(filepath string) (map[string]string, []string, string, error) {
 }
 
 // loadLearnedVocab 读取已背单词表 (如果不存在则返回空 map，不报错)
+// 将忽略空行、"----------" 分隔符，以及代表日期时间的格式（如包含 "-" 和 ":"）。
 func loadLearnedVocab(filepath string) map[string]bool {
 	learnedMap := make(map[string]bool)
 	file, err := os.Open(filepath)
@@ -176,6 +178,9 @@ func loadLearnedVocab(filepath string) map[string]bool {
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "----------") || (len(line) >= 10 && line[4] == '-' && line[7] == '-') {
+			continue
+		}
 		parts := strings.Split(line, ",")
 		if len(parts) >= 1 && line != "" {
 			word := strings.ToLower(strings.TrimSpace(parts[0]))
@@ -301,6 +306,10 @@ func categorizeWords(videoWordsMap map[string]string, lemmaMap map[string]string
 }
 
 // updateFiles 统一处理文件更新
+//   - 覆写待背表 (vocab.csv)，剔除已掌握单词
+//   - 将新掌握的单词追加到已背表 (learned_vocab.csv)，并注入日期时间与 "----------" 分隔符以作区分
+//   - 在视频专属目录下生成已掌握复习清单 (matched_words.md)，使用选项卡格式
+//   - 在视频专属目录下生成全新生词清单 (new_words_in_video.txt)
 func updateFiles(vocabPath string, learnedPath string, vocabLines []string, header string, outputDir string, matchedWords map[string][2]string, newWords map[string]string) error {
 	// 1. 覆写原始待背单词表 vocab.csv
 	vocabFile, err := os.Create(vocabPath)
@@ -347,25 +356,30 @@ func updateFiles(vocabPath string, learnedPath string, vocabLines []string, head
 			learnedWriter.WriteString(header + "\n")
 		}
 
+		// 写入日期时间和分隔符，便于后续按时间追溯已背词汇
+		nowStr := time.Now().Format("2006-01-02 15:04:05")
+		learnedWriter.WriteString(nowStr + "\n")
+		learnedWriter.WriteString("----------\n")
+
 		for _, line := range wordsToAppendToLearned {
 			learnedWriter.WriteString(line + "\n")
 		}
 		learnedWriter.Flush()
 	}
 
-	// 3. 生成本次复习表
-	matchedPath := filepath.Join(outputDir, "matched_words.txt")
+	// 3. 生成本次复习表 (Markdown 格式)
+	matchedPath := filepath.Join(outputDir, "matched_words.md")
 	mFile, err := os.Create(matchedPath)
 	if err != nil {
 		return err
 	}
 	defer mFile.Close()
 	mWriter := bufio.NewWriter(mFile)
-	mWriter.WriteString("======== 本期视频：已掌握单词复习 ========\n\n")
+	mWriter.WriteString("# 本期视频：已掌握单词复习\n\n")
 	for word, data := range matchedWords {
 		meaning := data[0]
 		sentence := data[1]
-		mWriter.WriteString(fmt.Sprintf("原形单词: %s\n中文释义: %s\n视频原句: %s\n\n", word, meaning, sentence))
+		mWriter.WriteString(fmt.Sprintf("- [ ] **%s**\n    - 释义：%s\n    - 原句：%s\n\n", word, meaning, sentence))
 	}
 	mWriter.Flush()
 
