@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -15,15 +17,37 @@ type Word struct {
 	Chinese string
 }
 
+// playAudio 负责自动查找并调用 macOS 自带的 afplay 命令播放音频
+func playAudio(word string) {
+	// 固定的根目录
+	baseAudioDir := "/Users/jiatongzhou/Public/Drop Box/学外语/daily_english_audio"
+
+	// 使用通配符 * 来匹配 day01 ~ day21 等所有子目录
+	pattern := filepath.Join(baseAudioDir, "*", word+".mp3")
+	matches, err := filepath.Glob(pattern)
+
+	// 如果没找到匹配的音频，或者发生了错误，直接静默退出
+	if err != nil || len(matches) == 0 {
+		return
+	}
+
+	// 找到了，直接拿匹配到的第一个文件路径去播放
+	audioPath := matches[0]
+	cmd := exec.Command("afplay", audioPath)
+
+	// 异步执行，放它的音频，你继续下一个词
+	go cmd.Run()
+}
+
 func main() {
 	reader := bufio.NewReader(os.Stdin)
-	fmt.Print("请输入单词文件路径 : ")
+	fmt.Print("请输入单词文件路径 (可以直接将文件拖入终端): ")
 	filePath, _ := reader.ReadString('\n')
 
-	// 1. 处理文件路径：去除换行符、首尾空格，以及 macOS 拖拽产生的首尾单引号
+	// 1. 处理文件路径
 	filePath = strings.TrimSpace(filePath)
 	filePath = strings.Trim(filePath, "'")
-	filePath = strings.TrimSpace(filePath) // 再次去除可能残余的空格
+	filePath = strings.TrimSpace(filePath)
 
 	// 2. 读取文件内容
 	file, err := os.Open(filePath)
@@ -69,7 +93,7 @@ func main() {
 	fmt.Printf("\n========== 开始听写 ==========\n")
 	fmt.Printf("本次共加载了 %d 个单词。(随时输入 'bye' 可提前结束并总结)\n", len(words))
 
-	earlyExit := false // 提前退出标志
+	earlyExit := false
 
 	// 4. 听写循环
 	for i, w := range words {
@@ -79,7 +103,6 @@ func main() {
 		errorCount := 0
 
 		for {
-			// 根据错误次数改变提示语
 			if errorCount >= 2 {
 				fmt.Printf("👉 正确答案是: %s (请照打一遍以继续): ", w.English)
 			} else {
@@ -95,25 +118,42 @@ func main() {
 			if strings.ToLower(ans) == "bye" {
 				fmt.Println("\n👋 收到“bye”，提前结束当前听写！")
 				earlyExit = true
-				break // 跳出当前单词的无限循环
+				break
 			}
 
 			// 判断单词是否正确
 			if strings.EqualFold(ans, w.English) {
-				fmt.Println("✅ 回答正确！")
+				fmt.Println("✅ 回答正确！🎵 正在查找并播放发音...")
+				fmt.Println("---------------------------------")
+				fmt.Printf("👉 %s : ", w.English)
+				fmt.Println(w.Chinese)
+				fmt.Println("---------------------------------")
+				fmt.Printf("👉 %s : ", w.English)
+				fmt.Println(w.Chinese)
+				fmt.Println("---------------------------------")
+				fmt.Printf("👉 %s : ", w.English)
+				fmt.Println(w.Chinese)
+				fmt.Println("---------------------------------")
+				fmt.Printf("👉 %s : ", w.English)
+				fmt.Println(w.Chinese)
+				fmt.Println("---------------------------------")
+				fmt.Printf("👉 %s : ", w.English)
+				fmt.Println(w.Chinese)
+				fmt.Println("---------------------------------")
+
+				playAudio(w.English)
+
 				if isFirstTry {
 					correctWords = append(correctWords, w)
 				}
-				break // 回答正确，跳出循环，进入下一个单词
+				break
 			} else {
-				// 如果是第一次错，记录到错词本
 				if isFirstTry {
 					incorrectWords = append(incorrectWords, w)
 					isFirstTry = false
 				}
 				errorCount++
 
-				// 根据错误次数给出不同的反馈
 				if errorCount == 1 {
 					fmt.Println("❌ 回答错误，请重试。")
 				} else if errorCount == 2 {
@@ -122,14 +162,12 @@ func main() {
 			}
 		}
 
-		// 如果检测到提前退出标志，跳出外层听写大循环
 		if earlyExit {
 			break
 		}
 	}
 
 	// 5. 总结输出
-	// 因为可能会提前退出，所以实际练习的数量是正确和错误单词数量之和
 	practicedCount := len(correctWords) + len(incorrectWords)
 
 	fmt.Println("\n========== 听写总结 ==========")
@@ -143,12 +181,22 @@ func main() {
 	fmt.Printf("曾经拼错: %d 个\n", len(incorrectWords))
 	fmt.Println("------------------------------")
 
+	// 新增：打印一次性拼对的单词
+	if len(correctWords) > 0 {
+		fmt.Println("🌟【一次拼对的单词】(超棒的):")
+		for _, w := range correctWords {
+			fmt.Printf("- %-15s : %s\n", w.English, w.Chinese)
+		}
+		fmt.Println("------------------------------")
+	}
+
+	// 打印拼错的单词
 	if len(incorrectWords) > 0 {
-		fmt.Println("【需要重点复习的单词】(拼错过的):")
+		fmt.Println("⚠️【需要重点复习的单词】(拼错过的):")
 		for _, w := range incorrectWords {
 			fmt.Printf("- %-15s : %s\n", w.English, w.Chinese)
 		}
 	} else {
-		fmt.Println("🎉 太棒了！今天听写的单词都是一次性拼写正确的！")
+		fmt.Println("🎉 太强了！今天听写的单词没有任何错题，完美通关！")
 	}
 }
