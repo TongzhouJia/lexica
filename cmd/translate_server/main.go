@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 )
@@ -26,10 +29,37 @@ type translateResponse struct {
 }
 
 // ---------------------------------------------------------------------------
-// In-memory cache  key = "sl:tl:text"
+// Google Cloud TTS API structures
 // ---------------------------------------------------------------------------
 
-var cache sync.Map
+type ttsRequest struct {
+	Input struct {
+		Text string `json:"text"`
+	} `json:"input"`
+	Voice struct {
+		LanguageCode string `json:"languageCode"`
+		Name         string `json:"name"`
+	} `json:"voice"`
+	AudioConfig struct {
+		AudioEncoding string `json:"audioEncoding"`
+	} `json:"audioConfig"`
+}
+
+type ttsResponse struct {
+	AudioContent string `json:"audioContent"`
+	Error        *struct {
+		Message string `json:"message"`
+	} `json:"error,omitempty"`
+}
+
+// ---------------------------------------------------------------------------
+// In-memory caches
+// ---------------------------------------------------------------------------
+
+var (
+	cache    sync.Map // translate cache: "sl:tl:text" → translated string
+	ttsCache sync.Map // TTS cache: text → []byte (MP3)
+)
 
 // ---------------------------------------------------------------------------
 // Load .env (minimal parser, no third-party deps)
@@ -99,6 +129,95 @@ func translate(apiKey, text, sl, tl string) (string, error) {
 	}
 
 	return result.Data.Translations[0].TranslatedText, nil
+}
+
+// ---------------------------------------------------------------------------
+// Call Google Cloud TTS API  (en-AU-Standard-A, Australian female)
+// ---------------------------------------------------------------------------
+
+func synthesizeTTS(apiKey, text string) ([]byte, error) {
+	apiURL := "https://texttospeech.googleapis.com/v1/text:synthesize?key=" + apiKey
+
+	req := ttsRequest{}
+	req.Input.Text = text
+	req.Voice.LanguageCode = "en-AU"
+	req.Voice.Name = "en-AU-Standard-A"
+	req.AudioConfig.AudioEncoding = "MP3"
+
+	jsonData, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("JSON encode failed: %w", err)
+	}
+
+	resp, err := http.Post(apiURL, "application/json", bytes.NewReader(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("TTS request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read TTS body failed: %w", err)
+	}
+
+	var ttsResp ttsResponse
+	if err := json.Unmarshal(body, &ttsResp); err != nil {
+		return nil, fmt.Errorf("TTS JSON decode failed: %w", err)
+	}
+	if ttsResp.Error != nil {
+		return nil, fmt.Errorf("TTS API error: %s", ttsResp.Error.Message)
+	}
+
+	audioBytes, err := base64.StdEncoding.DecodeString(ttsResp.AudioContent)
+	if err != nil {
+		return nil, fmt.Errorf("base64 decode failed: %w", err)
+	}
+
+	return audioBytes, nil
+}
+
+// ---------------------------------------------------------------------------
+// playLocal – synthesize TTS and play via afplay (non-blocking goroutine)
+// ---------------------------------------------------------------------------
+
+func playLocal(ttsKey, text string) {
+	go func() {
+		// Cache lookup
+		var audioBytes []byte
+		if cached, ok := ttsCache.Load(text); ok {
+			audioBytes = cached.([]byte)
+			log.Printf("[tts cache hit] %s", text)
+		} else {
+			var err error
+			audioBytes, err = synthesizeTTS(ttsKey, text)
+			if err != nil {
+				log.Printf("[tts error] %v", err)
+				return
+			}
+			ttsCache.Store(text, audioBytes)
+			log.Printf("[tts synthesized] %s (%d bytes)", text, len(audioBytes))
+		}
+
+		// Write to temp file and play via afplay
+		tmp, err := os.CreateTemp("", "tts-*.mp3")
+		if err != nil {
+			log.Printf("[tts error] create temp: %v", err)
+			return
+		}
+		defer os.Remove(tmp.Name())
+
+		if _, err := tmp.Write(audioBytes); err != nil {
+			tmp.Close()
+			log.Printf("[tts error] write temp: %v", err)
+			return
+		}
+		tmp.Close()
+
+		cmd := exec.Command("afplay", tmp.Name())
+		if err := cmd.Run(); err != nil {
+			log.Printf("[tts error] afplay: %v", err)
+		}
+	}()
 }
 
 // ---------------------------------------------------------------------------
@@ -189,17 +308,17 @@ func htmlEscape(s string) string {
 // HTTP handler
 // ---------------------------------------------------------------------------
 
-func handler(apiKey string) http.HandlerFunc {
+func translateHandler(translateKey, ttsKey string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
-			w.WriteHeader(http.StatusNotFound)
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusNotFound)
 			fmt.Fprint(w, renderError("Page not found"))
 			return
 		}
 		if r.Method != http.MethodGet {
-			w.WriteHeader(http.StatusMethodNotAllowed)
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusMethodNotAllowed)
 			fmt.Fprint(w, renderError("Only GET is allowed"))
 			return
 		}
@@ -216,6 +335,11 @@ func handler(apiKey string) http.HandlerFunc {
 			return
 		}
 
+		// Play TTS locally if source is English (non-blocking)
+		if strings.HasPrefix(strings.ToLower(sl), "en") {
+			playLocal(ttsKey, text)
+		}
+
 		// Cache lookup
 		cacheKey := sl + ":" + tl + ":" + text
 		if cached, ok := cache.Load(cacheKey); ok {
@@ -226,7 +350,7 @@ func handler(apiKey string) http.HandlerFunc {
 		}
 
 		// Call API
-		translated, err := translate(apiKey, text, sl, tl)
+		translated, err := translate(translateKey, text, sl, tl)
 		if err != nil {
 			log.Printf("[error] %v", err)
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -253,16 +377,20 @@ func main() {
 	loadEnv(".env")
 	loadEnv("../../.env")
 
-	apiKey := os.Getenv("GOOGLE_TRANSLATE_API_KEY")
-	if apiKey == "" {
-		// fallback: reuse TTS key (same GCP project)
-		apiKey = os.Getenv("GOOGLE_TTS_API_KEY")
+	translateKey := os.Getenv("GOOGLE_TRANSLATE_API_KEY")
+	if translateKey == "" {
+		translateKey = os.Getenv("GOOGLE_TTS_API_KEY")
 	}
-	if apiKey == "" {
-		log.Fatal("Set GOOGLE_TRANSLATE_API_KEY or GOOGLE_TTS_API_KEY in .env")
+	if translateKey == "" {
+		log.Fatal("Set GOOGLE_TRANSLATE_API_KEY in .env")
 	}
 
-	http.HandleFunc("/", handler(apiKey))
+	ttsKey := os.Getenv("GOOGLE_TTS_API_KEY")
+	if ttsKey == "" {
+		log.Fatal("Set GOOGLE_TTS_API_KEY in .env")
+	}
+
+	http.HandleFunc("/", translateHandler(translateKey, ttsKey))
 
 	addr := "127.0.0.1:8080"
 	fmt.Printf("Listening on http://%s\n", addr)
