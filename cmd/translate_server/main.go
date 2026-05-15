@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -12,9 +13,16 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 )
+
+// ---------------------------------------------------------------------------
+// Project root (resolved at startup)
+// ---------------------------------------------------------------------------
+
+var projectRoot string
 
 // ---------------------------------------------------------------------------
 // Google Translate API v2 response structures
@@ -58,7 +66,7 @@ type ttsResponse struct {
 
 var (
 	cache    sync.Map // translate cache: "sl:tl:text" → translated string
-	ttsCache sync.Map // TTS cache: text → []byte (MP3)
+	ttsCache sync.Map // TTS cache: text → MP3 file path on disk
 )
 
 // ---------------------------------------------------------------------------
@@ -88,6 +96,115 @@ func loadEnv(path string) {
 		val = strings.Trim(val, `"'`)
 		os.Setenv(key, val)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Disk cache: translations  →  data/translate_server/cache.json
+// ---------------------------------------------------------------------------
+
+func translateCachePath() string {
+	return filepath.Join(projectRoot, "data", "translate_server", "cache.json")
+}
+
+// loadTranslateCache reads the JSON cache file into the sync.Map
+func loadTranslateCache() {
+	path := translateCachePath()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return // no cache file yet
+	}
+	var m map[string]string
+	if err := json.Unmarshal(data, &m); err != nil {
+		log.Printf("[cache] failed to parse %s: %v", path, err)
+		return
+	}
+	for k, v := range m {
+		cache.Store(k, v)
+	}
+	log.Printf("[cache] loaded %d translations from disk", len(m))
+}
+
+// saveTranslateCache writes the full sync.Map out to disk
+func saveTranslateCache() {
+	m := make(map[string]string)
+	cache.Range(func(k, v any) bool {
+		m[k.(string)] = v.(string)
+		return true
+	})
+	data, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		log.Printf("[cache] marshal error: %v", err)
+		return
+	}
+	dir := filepath.Dir(translateCachePath())
+	os.MkdirAll(dir, 0755)
+	if err := os.WriteFile(translateCachePath(), data, 0644); err != nil {
+		log.Printf("[cache] write error: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Disk cache: TTS audio  →  data/tts_cache/<hash>.mp3
+// (shared with gsay)
+// ---------------------------------------------------------------------------
+
+func ttsCacheDir() string {
+	return filepath.Join(projectRoot, "data", "tts_cache")
+}
+
+func textHash(text string) string {
+	h := sha256.Sum256([]byte(text))
+	return fmt.Sprintf("%x", h)[:16]
+}
+
+// loadTTSCache scans existing MP3 files and their index
+func loadTTSCache() {
+	dir := ttsCacheDir()
+	indexPath := filepath.Join(dir, "index.json")
+	data, err := os.ReadFile(indexPath)
+	if err != nil {
+		return
+	}
+	var m map[string]string // text → filename
+	if err := json.Unmarshal(data, &m); err != nil {
+		return
+	}
+	count := 0
+	for text, filename := range m {
+		mp3Path := filepath.Join(dir, filename)
+		if _, err := os.Stat(mp3Path); err == nil {
+			ttsCache.Store(text, mp3Path)
+			count++
+		}
+	}
+	log.Printf("[tts cache] loaded %d entries from disk", count)
+}
+
+// saveTTSAudio writes MP3 to disk and updates the index
+func saveTTSAudio(text string, audioBytes []byte) string {
+	dir := ttsCacheDir()
+	os.MkdirAll(dir, 0755)
+
+	filename := textHash(text) + ".mp3"
+	mp3Path := filepath.Join(dir, filename)
+
+	if err := os.WriteFile(mp3Path, audioBytes, 0644); err != nil {
+		log.Printf("[tts cache] write error: %v", err)
+		return ""
+	}
+
+	// Update index.json
+	indexPath := filepath.Join(dir, "index.json")
+	m := make(map[string]string)
+	if data, err := os.ReadFile(indexPath); err == nil {
+		json.Unmarshal(data, &m)
+	}
+	m[text] = filename
+	if data, err := json.MarshalIndent(m, "", "  "); err == nil {
+		os.WriteFile(indexPath, data, 0644)
+	}
+
+	return mp3Path
 }
 
 // ---------------------------------------------------------------------------
@@ -177,45 +294,34 @@ func synthesizeTTS(apiKey, text string) ([]byte, error) {
 }
 
 // ---------------------------------------------------------------------------
-// playLocal – synthesize TTS and play via afplay (non-blocking goroutine)
+// playLocal – get or synthesize TTS, play via afplay (non-blocking goroutine)
 // ---------------------------------------------------------------------------
 
 func playLocal(ttsKey, text string) {
 	go func() {
-		// Cache lookup
-		var audioBytes []byte
-		if cached, ok := ttsCache.Load(text); ok {
-			audioBytes = cached.([]byte)
-			log.Printf("[tts cache hit] %s", text)
-		} else {
-			var err error
-			audioBytes, err = synthesizeTTS(ttsKey, text)
-			if err != nil {
-				log.Printf("[tts error] %v", err)
+		// 1. Check disk/memory cache for existing MP3 file
+		if cachedPath, ok := ttsCache.Load(text); ok {
+			mp3Path := cachedPath.(string)
+			if _, err := os.Stat(mp3Path); err == nil {
+				log.Printf("[tts disk hit] %s", text)
+				exec.Command("afplay", mp3Path).Run()
 				return
 			}
-			ttsCache.Store(text, audioBytes)
-			log.Printf("[tts synthesized] %s (%d bytes)", text, len(audioBytes))
 		}
 
-		// Write to temp file and play via afplay
-		tmp, err := os.CreateTemp("", "tts-*.mp3")
+		// 2. Call TTS API
+		audioBytes, err := synthesizeTTS(ttsKey, text)
 		if err != nil {
-			log.Printf("[tts error] create temp: %v", err)
+			log.Printf("[tts error] %v", err)
 			return
 		}
-		defer os.Remove(tmp.Name())
 
-		if _, err := tmp.Write(audioBytes); err != nil {
-			tmp.Close()
-			log.Printf("[tts error] write temp: %v", err)
-			return
-		}
-		tmp.Close()
-
-		cmd := exec.Command("afplay", tmp.Name())
-		if err := cmd.Run(); err != nil {
-			log.Printf("[tts error] afplay: %v", err)
+		// 3. Save to disk cache
+		mp3Path := saveTTSAudio(text, audioBytes)
+		if mp3Path != "" {
+			ttsCache.Store(text, mp3Path)
+			log.Printf("[tts cached] %s → %s", text, mp3Path)
+			exec.Command("afplay", mp3Path).Run()
 		}
 	}()
 }
@@ -225,6 +331,33 @@ func playLocal(ttsKey, text string) {
 // ---------------------------------------------------------------------------
 
 func renderSuccess(text, translated, sl, tl string) string {
+	// Build play button (only for English source)
+	playBtn := ""
+	if strings.HasPrefix(strings.ToLower(sl), "en") {
+		playBtn = fmt.Sprintf(`
+    <button id="playBtn" onclick="playTTS()" style="
+      margin-top:28px; padding:16px 48px; font-size:28px;
+      border:none; border-radius:16px; cursor:pointer;
+      background:linear-gradient(135deg,rgba(167,139,250,0.3),rgba(96,165,250,0.3));
+      color:#e0e0e0; transition:all 0.25s ease;
+      display:inline-flex; align-items:center; gap:12px;
+      box-shadow:0 4px 16px rgba(0,0,0,0.3);
+    " onmouseover="this.style.transform='scale(1.05)';this.style.boxShadow='0 6px 24px rgba(167,139,250,0.4)'"
+       onmouseout="this.style.transform='scale(1)';this.style.boxShadow='0 4px 16px rgba(0,0,0,0.3)'"
+    >🔊 Play</button>
+    <script>
+    function playTTS(){
+      var btn=document.getElementById('playBtn');
+      btn.innerText='🔊 Playing...';
+      btn.disabled=true;
+      btn.style.opacity='0.6';
+      fetch('/play?text=%s')
+        .then(function(){btn.innerText='🔊 Play';btn.disabled=false;btn.style.opacity='1';})
+        .catch(function(){btn.innerText='🔊 Play';btn.disabled=false;btn.style.opacity='1';});
+    }
+    </script>`, url.QueryEscape(text))
+	}
+
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -252,7 +385,7 @@ func renderSuccess(text, translated, sl, tl string) string {
               background:linear-gradient(90deg,#a78bfa,#60a5fa);
               -webkit-background-clip:text;-webkit-text-fill-color:transparent;">%s</p>
     <hr style="border:none;border-top:1px solid rgba(255,255,255,0.1);margin:20px 0;">
-    <p style="font-size:36px;font-weight:400;margin:0;color:#c4b5fd;">%s</p>
+    <p style="font-size:36px;font-weight:400;margin:0;color:#c4b5fd;">%s</p>%s
   </div>
 </body>
 </html>`,
@@ -260,6 +393,7 @@ func renderSuccess(text, translated, sl, tl string) string {
 		htmlEscape(strings.ToUpper(tl)),
 		htmlEscape(text),
 		htmlEscape(translated),
+		playBtn,
 	)
 }
 
@@ -359,8 +493,9 @@ func translateHandler(translateKey, ttsKey string) http.HandlerFunc {
 			return
 		}
 
-		// Store in cache
+		// Store in memory + disk cache
 		cache.Store(cacheKey, translated)
+		saveTranslateCache()
 		log.Printf("[translated] %s → %s", text, translated)
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -369,13 +504,41 @@ func translateHandler(translateKey, ttsKey string) http.HandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
+// Play handler – GET /play?text=hello → triggers local afplay
+// ---------------------------------------------------------------------------
+
+func playHandler(ttsKey string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		text := r.URL.Query().Get("text")
+		if text == "" {
+			http.Error(w, "missing text", http.StatusBadRequest)
+			return
+		}
+		playLocal(ttsKey, text)
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "ok")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
 func main() {
-	// Load .env – try current dir and project root
-	loadEnv(".env")
-	loadEnv("../../.env")
+	// Resolve project root (works from cmd/translate_server/ or project root)
+	// Try ../../ first (running from cmd/translate_server/), then current dir
+	if _, err := os.Stat("../../.env"); err == nil {
+		projectRoot, _ = filepath.Abs("../../")
+	} else if _, err := os.Stat(".env"); err == nil {
+		projectRoot, _ = filepath.Abs(".")
+	} else {
+		// fallback: absolute path
+		home, _ := os.UserHomeDir()
+		projectRoot = filepath.Join(home, "GolandProjects", "my-toolbox")
+	}
+
+	// Load .env
+	loadEnv(filepath.Join(projectRoot, ".env"))
 
 	translateKey := os.Getenv("GOOGLE_TRANSLATE_API_KEY")
 	if translateKey == "" {
@@ -390,7 +553,13 @@ func main() {
 		log.Fatal("Set GOOGLE_TTS_API_KEY in .env")
 	}
 
+	// Load disk caches
+	loadTranslateCache()
+	loadTTSCache()
+	log.Printf("[init] project root: %s", projectRoot)
+
 	http.HandleFunc("/", translateHandler(translateKey, ttsKey))
+	http.HandleFunc("/play", playHandler(ttsKey))
 
 	addr := "127.0.0.1:8080"
 	fmt.Printf("Listening on http://%s\n", addr)

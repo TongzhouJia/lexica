@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -66,6 +68,64 @@ func loadEnv(path string) {
 }
 
 // ---------------------------------------------------------------------------
+// TTS disk cache (shared with translate_server)
+// Location: data/tts_cache/<hash>.mp3 + index.json
+// ---------------------------------------------------------------------------
+
+func textHash(text string) string {
+	h := sha256.Sum256([]byte(text))
+	return fmt.Sprintf("%x", h)[:16]
+}
+
+// lookupCache checks if an MP3 already exists on disk for this text
+func lookupCache(cacheDir, text string) string {
+	indexPath := filepath.Join(cacheDir, "index.json")
+	data, err := os.ReadFile(indexPath)
+	if err != nil {
+		return ""
+	}
+	var m map[string]string
+	if err := json.Unmarshal(data, &m); err != nil {
+		return ""
+	}
+	filename, ok := m[text]
+	if !ok {
+		return ""
+	}
+	mp3Path := filepath.Join(cacheDir, filename)
+	if _, err := os.Stat(mp3Path); err != nil {
+		return ""
+	}
+	return mp3Path
+}
+
+// saveCache writes the MP3 to disk and updates index.json
+func saveCache(cacheDir, text string, audioBytes []byte) string {
+	os.MkdirAll(cacheDir, 0755)
+
+	filename := textHash(text) + ".mp3"
+	mp3Path := filepath.Join(cacheDir, filename)
+
+	if err := os.WriteFile(mp3Path, audioBytes, 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: cache write failed: %v\n", err)
+		return ""
+	}
+
+	// Update index.json
+	indexPath := filepath.Join(cacheDir, "index.json")
+	m := make(map[string]string)
+	if data, err := os.ReadFile(indexPath); err == nil {
+		json.Unmarshal(data, &m)
+	}
+	m[text] = filename
+	if data, err := json.MarshalIndent(m, "", "  "); err == nil {
+		os.WriteFile(indexPath, data, 0644)
+	}
+
+	return mp3Path
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -80,15 +140,36 @@ func main() {
 	// Join all args as the text (supports both `gsay hello` and `gsay "hello world"`)
 	text := strings.Join(os.Args[1:], " ")
 
-	// Load .env – try current dir, then project root (absolute path)
-	loadEnv(".env")
-	home, _ := os.UserHomeDir()
-	loadEnv(home + "/GolandProjects/my-toolbox/.env")
+	// Resolve project root
+	var projectRoot string
+	if _, err := os.Stat("../../.env"); err == nil {
+		projectRoot, _ = filepath.Abs("../../")
+	} else {
+		home, _ := os.UserHomeDir()
+		projectRoot = filepath.Join(home, "GolandProjects", "my-toolbox")
+	}
+
+	// Load .env
+	loadEnv(filepath.Join(projectRoot, ".env"))
 
 	apiKey := os.Getenv("GOOGLE_TTS_API_KEY")
 	if apiKey == "" {
 		fmt.Fprintln(os.Stderr, "Error: GOOGLE_TTS_API_KEY not set in .env")
 		os.Exit(1)
+	}
+
+	// Shared TTS cache directory: data/tts_cache/
+	cacheDir := filepath.Join(projectRoot, "data", "tts_cache")
+
+	// Check disk cache first
+	if mp3Path := lookupCache(cacheDir, text); mp3Path != "" {
+		fmt.Printf("🔊 %s (cached)\n", text)
+		cmd := exec.Command("afplay", mp3Path)
+		if err := cmd.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error playing audio: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	// Call Google TTS API
@@ -135,23 +216,23 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Write to temp file and play
-	tmp, err := os.CreateTemp("", "gsay-*.mp3")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-	defer os.Remove(tmp.Name())
-
-	if _, err := tmp.Write(audioBytes); err != nil {
+	// Save to disk cache, then play from cached file
+	mp3Path := saveCache(cacheDir, text, audioBytes)
+	if mp3Path == "" {
+		// fallback: temp file
+		tmp, err := os.CreateTemp("", "gsay-*.mp3")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		defer os.Remove(tmp.Name())
+		tmp.Write(audioBytes)
 		tmp.Close()
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		mp3Path = tmp.Name()
 	}
-	tmp.Close()
 
 	fmt.Printf("🔊 %s\n", text)
-	cmd := exec.Command("afplay", tmp.Name())
+	cmd := exec.Command("afplay", mp3Path)
 	if err := cmd.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error playing audio: %v\n", err)
 		os.Exit(1)
