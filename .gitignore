@@ -9,6 +9,7 @@ data/
 .env
 
 # 忽略编译后的二进制文件
+word_reader
 *.exe
 *.exe~
 *.dll
