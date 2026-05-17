@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -65,8 +66,9 @@ type ttsResponse struct {
 // ---------------------------------------------------------------------------
 
 var (
-	cache    sync.Map // translate cache: "sl:tl:text" → translated string
-	ttsCache sync.Map // TTS cache: text → MP3 file path on disk
+	cache        sync.Map // translate cache: "sl:tl:text" → translated string
+	ttsCache     sync.Map // TTS cache: text → MP3 file path on disk
+	vocabularyMu sync.Mutex
 )
 
 // ---------------------------------------------------------------------------
@@ -330,13 +332,13 @@ func playLocal(ttsKey, text string) {
 // HTML templates (inline CSS, large font)
 // ---------------------------------------------------------------------------
 
-func renderSuccess(text, translated, sl, tl string) string {
+func renderSuccess(text, translated, sl, tl string, alreadySaved bool) string {
 	// Build play button (only for English source)
 	playBtn := ""
 	if strings.HasPrefix(strings.ToLower(sl), "en") {
 		playBtn = fmt.Sprintf(`
     <button id="playBtn" onclick="playTTS()" style="
-      margin-top:28px; padding:16px 48px; font-size:28px;
+      padding:16px 48px; font-size:28px;
       border:none; border-radius:16px; cursor:pointer;
       background:linear-gradient(135deg,rgba(167,139,250,0.3),rgba(96,165,250,0.3));
       color:#e0e0e0; transition:all 0.25s ease;
@@ -356,6 +358,69 @@ func renderSuccess(text, translated, sl, tl string) string {
         .catch(function(){btn.innerText='🔊 Play';btn.disabled=false;btn.style.opacity='1';});
     }
     </script>`, url.QueryEscape(text))
+	}
+
+	saveBtn := `
+    <span id="saveStatus" style="
+      padding:16px 48px; font-size:28px;
+      border-radius:16px;
+      background:linear-gradient(135deg,rgba(74,222,128,0.2),rgba(34,197,94,0.2));
+      color:#bbf7d0;
+      display:inline-flex; align-items:center; gap:12px;
+      border:1px solid rgba(187,247,208,0.25);
+    ">✅ 已在错题本</span>`
+	if !alreadySaved {
+		saveBtn = fmt.Sprintf(`
+    <button id="saveBtn" onclick="saveWord()" style="
+      padding:16px 48px; font-size:28px;
+      border:none; border-radius:16px; cursor:pointer;
+      background:linear-gradient(135deg,rgba(74,222,128,0.3),rgba(59,130,246,0.3));
+      color:#e0e0e0; transition:all 0.25s ease;
+      display:inline-flex; align-items:center; gap:12px;
+      box-shadow:0 4px 16px rgba(0,0,0,0.3);
+    " onmouseover="this.style.transform='scale(1.05)';this.style.boxShadow='0 6px 24px rgba(74,222,128,0.4)'"
+       onmouseout="this.style.transform='scale(1)';this.style.boxShadow='0 4px 16px rgba(0,0,0,0.3)'"
+    >➕ 加入错题本</button>
+    <script>
+    function showSavedStatus(label){
+      var btn=document.getElementById('saveBtn');
+      if(!btn){return;}
+      var status=document.createElement('span');
+      status.id='saveStatus';
+      status.innerText=label;
+      status.setAttribute('style',
+        'padding:16px 48px; font-size:28px; border-radius:16px;' +
+        'background:linear-gradient(135deg,rgba(74,222,128,0.2),rgba(34,197,94,0.2));' +
+        'color:#bbf7d0; display:inline-flex; align-items:center; gap:12px;' +
+        'border:1px solid rgba(187,247,208,0.25);'
+      );
+      btn.replaceWith(status);
+    }
+    function saveWord(){
+      var btn=document.getElementById('saveBtn');
+      btn.innerText='保存中...';
+      btn.disabled=true;
+      btn.style.opacity='0.6';
+      fetch('/save?text=%s&translated=%s&sl=%s')
+        .then(function(res){
+          return res.text().then(function(body){return {ok:res.ok, body:body};});
+        })
+        .then(function(result){
+          if(result.ok){
+            showSavedStatus(result.body === 'exists' ? '✅ 已在错题本' : '✅ 已加入错题本');
+          }else{
+            btn.innerText='保存失败';
+            btn.disabled=false;
+            btn.style.opacity='1';
+          }
+        })
+        .catch(function(){
+            btn.innerText='保存失败';
+            btn.disabled=false;
+            btn.style.opacity='1';
+        });
+    }
+    </script>`, url.QueryEscape(text), url.QueryEscape(translated), url.QueryEscape(sl))
 	}
 
 	return fmt.Sprintf(`<!DOCTYPE html>
@@ -385,7 +450,11 @@ func renderSuccess(text, translated, sl, tl string) string {
               background:linear-gradient(90deg,#a78bfa,#60a5fa);
               -webkit-background-clip:text;-webkit-text-fill-color:transparent;">%s</p>
     <hr style="border:none;border-top:1px solid rgba(255,255,255,0.1);margin:20px 0;">
-    <p style="font-size:36px;font-weight:400;margin:0;color:#c4b5fd;">%s</p>%s
+    <p style="font-size:36px;font-weight:400;margin:0;color:#c4b5fd;">%s</p>
+    <div style="margin-top:28px; display:flex; justify-content:center; gap:16px; flex-wrap:wrap;">
+      %s
+      %s
+    </div>
   </div>
 </body>
 </html>`,
@@ -394,6 +463,7 @@ func renderSuccess(text, translated, sl, tl string) string {
 		htmlEscape(text),
 		htmlEscape(translated),
 		playBtn,
+		saveBtn,
 	)
 }
 
@@ -438,6 +508,80 @@ func htmlEscape(s string) string {
 	return s
 }
 
+func vocabularyPath() string {
+	return filepath.Join(projectRoot, "data", "vocabulary.csv")
+}
+
+func normalizeVocabText(s string) string {
+	s = strings.TrimPrefix(strings.TrimSpace(s), "\ufeff")
+	return strings.Join(strings.Fields(s), " ")
+}
+
+func vocabularyKey(s string) string {
+	return strings.ToLower(normalizeVocabText(s))
+}
+
+func vocabularyEntry(text, translated, sl string) (string, string) {
+	text = normalizeVocabText(text)
+	translated = normalizeVocabText(translated)
+	if strings.HasPrefix(strings.ToLower(sl), "en") {
+		return text, translated
+	}
+	return translated, text
+}
+
+func vocabularyContains(en string) (bool, error) {
+	vocabularyMu.Lock()
+	defer vocabularyMu.Unlock()
+	return vocabularyContainsLocked(en)
+}
+
+func vocabularyContainsLocked(en string) (bool, error) {
+	key := vocabularyKey(en)
+	if key == "" {
+		return false, nil
+	}
+
+	f, err := os.Open(vocabularyPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	defer f.Close()
+
+	reader := csv.NewReader(f)
+	reader.FieldsPerRecord = -1
+	reader.LazyQuotes = true
+	reader.TrimLeadingSpace = true
+
+	for {
+		record, err := reader.Read()
+		if err == io.EOF {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		if len(record) == 0 {
+			continue
+		}
+		if vocabularyKey(record[0]) == key {
+			return true, nil
+		}
+	}
+}
+
+func isVocabularySaved(text, translated, sl string) bool {
+	en, _ := vocabularyEntry(text, translated, sl)
+	exists, err := vocabularyContains(en)
+	if err != nil {
+		log.Printf("[vocab check error] %v", err)
+	}
+	return exists
+}
+
 // ---------------------------------------------------------------------------
 // HTTP handler
 // ---------------------------------------------------------------------------
@@ -477,9 +621,10 @@ func translateHandler(translateKey, ttsKey string) http.HandlerFunc {
 		// Cache lookup
 		cacheKey := sl + ":" + tl + ":" + text
 		if cached, ok := cache.Load(cacheKey); ok {
+			translated := cached.(string)
 			log.Printf("[cache hit] %s", cacheKey)
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			fmt.Fprint(w, renderSuccess(text, cached.(string), sl, tl))
+			fmt.Fprint(w, renderSuccess(text, translated, sl, tl, isVocabularySaved(text, translated, sl)))
 			return
 		}
 
@@ -499,7 +644,7 @@ func translateHandler(translateKey, ttsKey string) http.HandlerFunc {
 		log.Printf("[translated] %s → %s", text, translated)
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, renderSuccess(text, translated, sl, tl))
+		fmt.Fprint(w, renderSuccess(text, translated, sl, tl, isVocabularySaved(text, translated, sl)))
 	}
 }
 
@@ -515,6 +660,81 @@ func playHandler(ttsKey string) http.HandlerFunc {
 			return
 		}
 		playLocal(ttsKey, text)
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "ok")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Save handler – GET/POST /save?text=X&translated=Y&sl=Z → appends to data/vocabulary.csv if missing
+// ---------------------------------------------------------------------------
+
+func saveHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodPost {
+			http.Error(w, "only GET or POST is allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		text := r.URL.Query().Get("text")
+		translated := r.URL.Query().Get("translated")
+		sl := r.URL.Query().Get("sl")
+
+		if text == "" || translated == "" || sl == "" {
+			http.Error(w, "missing text, translated, or sl", http.StatusBadRequest)
+			return
+		}
+
+		en, zh := vocabularyEntry(text, translated, sl)
+		if en == "" || zh == "" {
+			http.Error(w, "empty vocabulary entry", http.StatusBadRequest)
+			return
+		}
+
+		dataDir := filepath.Join(projectRoot, "data")
+		if err := os.MkdirAll(dataDir, 0755); err != nil {
+			log.Printf("[save error] %v", err)
+			http.Error(w, "failed to create data directory", http.StatusInternalServerError)
+			return
+		}
+
+		vocabularyMu.Lock()
+		defer vocabularyMu.Unlock()
+
+		exists, err := vocabularyContainsLocked(en)
+		if err != nil {
+			log.Printf("[save error] %v", err)
+			http.Error(w, "failed to read vocabulary", http.StatusInternalServerError)
+			return
+		}
+		if exists {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, "exists")
+			return
+		}
+
+		f, err := os.OpenFile(vocabularyPath(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			log.Printf("[save error] %v", err)
+			http.Error(w, "failed to open file", http.StatusInternalServerError)
+			return
+		}
+		defer f.Close()
+
+		writer := csv.NewWriter(f)
+		if err := writer.Write([]string{en, zh}); err != nil {
+			log.Printf("[save error] %v", err)
+			http.Error(w, "failed to write csv", http.StatusInternalServerError)
+			return
+		}
+		writer.Flush()
+
+		if err := writer.Error(); err != nil {
+			log.Printf("[save error] %v", err)
+			http.Error(w, "failed to flush csv", http.StatusInternalServerError)
+			return
+		}
+
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, "ok")
 	}
@@ -560,6 +780,7 @@ func main() {
 
 	http.HandleFunc("/", translateHandler(translateKey, ttsKey))
 	http.HandleFunc("/play", playHandler(ttsKey))
+	http.HandleFunc("/save", saveHandler())
 
 	addr := "127.0.0.1:8080"
 	fmt.Printf("Listening on http://%s\n", addr)
