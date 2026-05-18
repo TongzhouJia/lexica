@@ -7,9 +7,12 @@ data/
 
 # 忽略环境变量/机密文件（切勿提交！）
 .env
+credentials/
+vertex-*.json
 
 # 忽略编译后的二进制文件
 word_reader
+/translate_server
 *.exe
 *.exe~
 *.dll

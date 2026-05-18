@@ -1,0 +1,1199 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lexica · 选词即译</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+
+<style>
+:root {
+  --bg:           #FAF6EC;
+  --bg-elev:      #FFFDF6;
+  --paper-edge:   #E8DFC9;
+  --ink:          #2A2520;
+  --ink-soft:     #6B6055;
+  --rule:         #DCD3BE;
+  --accent:       #B85C38;
+  --accent-soft:  #D89B7C;
+  --gold:         #A88A45;
+  --gcp:          #2F6F63;
+  --gcp-soft:     #E3EFEA;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0; padding: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: 'Newsreader', 'Source Han Serif SC', 'Songti SC', Georgia, serif;
+  font-size: 18px;
+  line-height: 1.75;
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "kern", "liga";
+}
+
+/* subtle paper grain via gradient noise */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(circle at 20% 30%, rgba(168,138,69,0.04) 0, transparent 40%),
+    radial-gradient(circle at 80% 70%, rgba(184,92,56,0.03) 0, transparent 50%);
+  z-index: 0;
+}
+
+/* ========== HEADER ========== */
+header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: rgba(250, 246, 236, 0.92);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--rule);
+  padding: 16px 32px;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.brand {
+  font-family: 'Instrument Serif', serif;
+  font-size: 30px;
+  font-weight: 400;
+  margin: 0;
+  letter-spacing: 0.5px;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.brand .mark {
+  color: var(--accent);
+  font-style: italic;
+  font-size: 24px;
+}
+.brand .subtitle {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  font-weight: 400;
+}
+
+.controls {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  margin-left: auto;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+}
+
+.ctrl {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-soft);
+}
+.ctrl-label {
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 10px;
+}
+
+input[type="text"], input[type="number"] {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  background: var(--bg-elev);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 6px 9px;
+  color: var(--ink);
+  outline: none;
+  transition: border-color 0.15s;
+}
+input[type="text"]:focus, input[type="number"]:focus {
+  border-color: var(--accent);
+}
+
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+  gap: 6px;
+}
+.toggle input { display: none; }
+.toggle .switch {
+  width: 28px;
+  height: 16px;
+  background: var(--rule);
+  border-radius: 8px;
+  position: relative;
+  transition: background 0.2s;
+}
+.toggle .switch::after {
+  content: '';
+  position: absolute;
+  width: 12px; height: 12px;
+  background: var(--bg-elev);
+  border-radius: 50%;
+  top: 2px; left: 2px;
+  transition: transform 0.2s;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+}
+.toggle input:checked + .switch { background: var(--accent); }
+.toggle input:checked + .switch::after { transform: translateX(12px); }
+
+button {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  background: var(--ink);
+  color: var(--bg);
+  border: none;
+  border-radius: 3px;
+  padding: 8px 14px;
+  cursor: pointer;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  transition: background 0.15s;
+}
+button:hover { background: var(--accent); }
+button.primary { background: var(--accent); }
+button.primary:hover { background: #9D4C2E; }
+
+/* ========== APP SHELL ========== */
+.app-shell {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 292px minmax(0, 1fr);
+  align-items: start;
+  min-height: calc(100vh - 74px);
+}
+
+.library {
+  position: sticky;
+  top: 74px;
+  height: calc(100vh - 74px);
+  border-right: 1px solid var(--rule);
+  background: rgba(255, 253, 246, 0.72);
+  padding: 18px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow: hidden;
+}
+
+.library-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.library-title {
+  margin: 0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  line-height: 1.3;
+}
+
+.library-prefix {
+  display: block;
+  margin-top: 4px;
+  font-family: 'Newsreader', serif;
+  font-size: 16px;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--gcp);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-refresh {
+  background: transparent;
+  color: var(--gcp);
+  border: 1px solid var(--rule);
+  padding: 7px 10px;
+}
+.library-refresh:hover {
+  background: var(--gcp);
+  border-color: var(--gcp);
+  color: var(--bg);
+}
+
+.library-status {
+  min-height: 20px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--ink-soft);
+}
+.library-status.error { color: var(--accent); }
+
+.library-list {
+  overflow: auto;
+  padding-right: 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.library-item {
+  width: 100%;
+  display: grid;
+  gap: 2px;
+  text-align: left;
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 9px 10px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.library-item:hover {
+  background: var(--gcp-soft);
+  border-color: rgba(47, 111, 99, 0.18);
+}
+.library-item.active {
+  background: var(--gcp-soft);
+  border-color: rgba(47, 111, 99, 0.38);
+  color: var(--gcp);
+}
+.library-name {
+  font-family: 'Newsreader', 'Source Han Serif SC', serif;
+  font-size: 15px;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.library-path,
+.library-meta {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.library-item.active .library-path,
+.library-item.active .library-meta { color: rgba(47, 111, 99, 0.78); }
+
+/* ========== MAIN ========== */
+main {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 56px 32px 200px;
+  width: 100%;
+}
+
+/* Empty state */
+#status {
+  text-align: center;
+  padding: 80px 0;
+}
+.hint-title {
+  font-family: 'Instrument Serif', serif;
+  font-style: italic;
+  font-size: 36px;
+  color: var(--ink);
+  margin: 0 0 14px;
+  font-weight: 400;
+}
+.hint-sub {
+  font-family: 'Newsreader', serif;
+  color: var(--ink-soft);
+  font-size: 16px;
+  margin: 0 0 32px;
+  font-style: italic;
+}
+.hint-ornament {
+  color: var(--gold);
+  font-size: 14px;
+  letter-spacing: 0.4em;
+  margin: 32px 0;
+}
+.hint-formats {
+  display: inline-flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 8px;
+}
+.hint-formats span {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ink-soft);
+  padding: 4px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  background: var(--bg-elev);
+}
+
+.api-doc {
+  margin-top: 48px;
+  padding: 20px 24px;
+  background: var(--bg-elev);
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--accent);
+  text-align: left;
+  font-size: 14px;
+  color: var(--ink-soft);
+  font-family: 'JetBrains Mono', monospace;
+  line-height: 1.6;
+}
+.api-doc strong {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+/* Document content */
+#content {
+  display: none;
+  font-size: 19px;
+  letter-spacing: 0.005em;
+  color: var(--ink);
+}
+#content[data-mode="plain"] {
+  white-space: pre-wrap;
+  font-family: 'Newsreader', 'Source Han Serif SC', 'Songti SC', Georgia, serif;
+}
+#content h1, #content h2, #content h3, #content h4 {
+  font-family: 'Instrument Serif', 'Source Han Serif SC', 'Songti SC', serif;
+  font-weight: 400;
+  font-style: italic;
+  color: var(--ink);
+  margin: 1.8em 0 0.6em;
+}
+#content h1 { font-size: 32px; }
+#content h2 { font-size: 26px; }
+#content h3 { font-size: 22px; }
+#content p { margin: 0.7em 0; }
+#content a { color: var(--accent); }
+#content ul, #content ol { padding-left: 24px; }
+#content img { max-width: 100%; height: auto; }
+#content table.csv-table {
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 16px;
+  width: 100%;
+}
+#content table.csv-table td {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--rule);
+}
+#content table.csv-table tr:first-child td {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ink-soft);
+  border-bottom: 1.5px solid var(--ink);
+}
+
+.page-break {
+  text-align: center;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.3em;
+  color: var(--gold);
+  margin: 40px 0 32px;
+  text-transform: uppercase;
+}
+.page-break::before, .page-break::after {
+  content: '·';
+  margin: 0 14px;
+}
+
+/* Selection highlight */
+::selection {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+/* ========== POPUP ========== */
+#popup {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 100;
+  background: var(--bg-elev);
+  border: 1px solid var(--paper-edge);
+  border-radius: 6px;
+  box-shadow:
+    0 20px 50px rgba(42, 37, 32, 0.18),
+    0 4px 12px rgba(42, 37, 32, 0.08),
+    0 0 0 1px rgba(255,255,255,0.5) inset;
+  width: 420px;
+  max-width: calc(100vw - 32px);
+  height: 500px;
+  max-height: calc(100vh - 120px);
+  display: none;
+  flex-direction: column;
+  overflow: hidden;
+  transform-origin: bottom right;
+  animation: pop 0.22s cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+#popup.visible { display: flex; }
+
+@keyframes pop {
+  from { opacity: 0; transform: scale(0.92) translateY(8px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+#popup-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--bg);
+  gap: 12px;
+  cursor: move;
+  user-select: none;
+  touch-action: none;
+}
+#popup.dragging { animation: none; }
+#popup.dragging #popup-header { cursor: grabbing; }
+
+#popup-word {
+  font-family: 'Instrument Serif', 'Source Han Serif SC', serif;
+  font-style: italic;
+  font-size: 22px;
+  color: var(--accent);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  flex: 1;
+  line-height: 1.2;
+}
+
+.popup-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
+.popup-actions button {
+  background: transparent;
+  color: var(--ink-soft);
+  border: 1px solid var(--rule);
+  padding: 5px 10px;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+}
+.popup-actions button:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+}
+.popup-actions button.icon-only {
+  padding: 5px 8px;
+  font-size: 13px;
+  letter-spacing: 0;
+}
+
+#popup-frame {
+  flex: 1;
+  border: none;
+  width: 100%;
+  background: white;
+  display: block;
+}
+
+#popup-loading {
+  position: absolute;
+  inset: 49px 0 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-elev);
+  color: var(--ink-soft);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+#popup-loading.show { display: flex; }
+#popup-loading::after {
+  content: '';
+  display: inline-block;
+  margin-left: 10px;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--rule);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Flash toast */
+.flash {
+  position: fixed;
+  bottom: 32px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--ink);
+  color: var(--bg);
+  padding: 10px 20px;
+  border-radius: 4px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  z-index: 200;
+  animation: flash 1.8s ease forwards;
+  pointer-events: none;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.2);
+}
+.flash.error { background: var(--accent); }
+@keyframes flash {
+  0%   { opacity: 0; transform: translate(-50%, 10px); }
+  15%  { opacity: 1; transform: translate(-50%, 0); }
+  85%  { opacity: 1; transform: translate(-50%, 0); }
+  100% { opacity: 0; transform: translate(-50%, -6px); }
+}
+
+/* Responsive */
+@media (max-width: 720px) {
+  header { padding: 12px 16px; gap: 12px; }
+  .brand { font-size: 22px; }
+  .brand .subtitle { display: none; }
+  .controls { font-size: 11px; gap: 10px; }
+  .app-shell {
+    display: block;
+    min-height: auto;
+  }
+  .library {
+    position: static;
+    height: 220px;
+    border-right: 0;
+    border-bottom: 1px solid var(--rule);
+  }
+  main { padding: 32px 20px 200px; }
+  #popup {
+    right: 12px; left: 12px;
+    width: auto;
+    height: 60vh;
+  }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <h1 class="brand">
+    <span class="mark">L</span>exica
+    <span class="subtitle">— select to read</span>
+  </h1>
+  <div class="controls">
+    <div class="ctrl">
+      <span class="ctrl-label">API</span>
+      <input type="text" id="api-url" value="http://127.0.0.1:8080" size="22">
+    </div>
+    <div class="ctrl">
+      <span class="ctrl-label">Delay</span>
+      <input type="number" id="delay" value="250" min="0" max="2000" step="50" style="width: 56px">
+      <span style="font-size: 10px; color: var(--ink-soft)">ms</span>
+    </div>
+    <label class="toggle" title="选中即朗读">
+      <input type="checkbox" id="autoplay" checked>
+      <span class="switch"></span>
+      <span class="ctrl-label">Play</span>
+    </label>
+    <input type="file" id="file-input" accept=".txt,.csv,.md,.pdf,.docx,.epub" hidden>
+    <button id="load-btn" class="primary">打开文件</button>
+  </div>
+</header>
+
+<div class="app-shell">
+  <aside class="library" aria-label="GCP files">
+    <div class="library-head">
+      <h2 class="library-title">
+        GCP Files
+        <span id="gcs-prefix" class="library-prefix">study-english/</span>
+      </h2>
+      <button id="gcs-refresh" class="library-refresh" title="刷新 GCP 文件">刷新</button>
+    </div>
+    <div id="gcs-status" class="library-status">连接中...</div>
+    <div id="gcs-list" class="library-list"></div>
+  </aside>
+
+  <main>
+    <div id="status">
+      <div class="hint-ornament">❦ · ❦ · ❦</div>
+      <h2 class="hint-title">A reader for your wordlists.</h2>
+      <p class="hint-sub">选中文字即朗读 · 翻译自动弹出</p>
+      <div class="hint-formats">
+        <span>txt</span><span>csv</span><span>md</span><span>pdf</span><span>docx</span><span>epub</span>
+      </div>
+    </div>
+
+    <div id="content"></div>
+  </main>
+</div>
+
+<div id="popup">
+  <div id="popup-header">
+    <div id="popup-word"></div>
+    <div class="popup-actions">
+      <button id="replay-btn" class="icon-only" title="再读一次">↻</button>
+      <button id="save-btn" title="加入错题本">✚ 收藏</button>
+      <button id="close-btn" class="icon-only" title="关闭 (Esc)">✕</button>
+    </div>
+  </div>
+  <iframe id="popup-frame" sandbox="allow-same-origin allow-scripts allow-popups"></iframe>
+  <div id="popup-loading">查询中</div>
+</div>
+
+<script>
+// ========================================================
+//  Settings (persisted in localStorage)
+// ========================================================
+const $ = id => document.getElementById(id);
+const apiUrlInput = $('api-url');
+const delayInput  = $('delay');
+const autoplayChk = $('autoplay');
+
+function defaultApiUrl() {
+  return /^https?:$/.test(window.location.protocol)
+    ? window.location.origin
+    : 'http://127.0.0.1:8080';
+}
+apiUrlInput.value = defaultApiUrl();
+
+function loadSettings() {
+  const url = localStorage.getItem('lexica.apiUrl');
+  const delay = localStorage.getItem('lexica.delay');
+  const ap = localStorage.getItem('lexica.autoplay');
+  if (url) apiUrlInput.value = url;
+  if (delay) delayInput.value = delay;
+  if (ap !== null) autoplayChk.checked = ap === '1';
+}
+loadSettings();
+
+apiUrlInput.addEventListener('change', () => {
+  localStorage.setItem('lexica.apiUrl', apiUrlInput.value);
+  refreshGCSFiles();
+});
+delayInput.addEventListener('change',  () => localStorage.setItem('lexica.delay', delayInput.value));
+autoplayChk.addEventListener('change', () => localStorage.setItem('lexica.autoplay', autoplayChk.checked ? '1' : '0'));
+
+const apiBase = () => apiUrlInput.value.trim().replace(/\/+$/, '');
+
+// ========================================================
+//  File loading & format dispatch
+// ========================================================
+const fileInput = $('file-input');
+const loadBtn   = $('load-btn');
+const statusEl  = $('status');
+const contentEl = $('content');
+const gcsPrefixEl  = $('gcs-prefix');
+const gcsStatusEl  = $('gcs-status');
+const gcsListEl    = $('gcs-list');
+const gcsRefreshBtn = $('gcs-refresh');
+
+let gcsFiles = [];
+let activeGCSName = '';
+
+loadBtn.addEventListener('click', () => fileInput.click());
+gcsRefreshBtn.addEventListener('click', refreshGCSFiles);
+
+fileInput.addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  activeGCSName = '';
+  renderGCSList(gcsFiles);
+  await openReaderFile(file, file.name);
+  fileInput.value = '';
+});
+
+function showStatus(msg, isError) {
+  statusEl.style.display = 'block';
+  contentEl.style.display = 'none';
+  statusEl.innerHTML = `
+    <div class="hint-ornament">${isError ? '✕' : '◐ ◓ ◑ ◒'}</div>
+    <h2 class="hint-title" style="${isError ? 'color: var(--accent)' : ''}">${escapeHTML(msg)}</h2>
+  `;
+}
+
+function escapeHTML(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function fileExt(name) {
+  return (name.split('.').pop() || '').toLowerCase();
+}
+
+async function readFileAsHTML(file) {
+  const ext = fileExt(file.name);
+  let html = '', mode = 'rich';
+
+  if (ext === 'txt' || ext === 'md') {
+    html = escapeHTML(await file.text());
+    mode = 'plain';
+  } else if (ext === 'csv') {
+    html = csvToTable(await file.text());
+  } else if (ext === 'pdf') {
+    html = await loadPDF(file);
+    mode = 'plain';
+  } else if (ext === 'docx') {
+    html = await loadDocx(file);
+  } else if (ext === 'epub') {
+    html = await loadEpub(file);
+  } else {
+    throw new Error(`不支持的格式: .${ext}`);
+  }
+
+  return { html, mode };
+}
+
+async function openReaderFile(file, label) {
+  showStatus(`读取中  ${label}`);
+
+  try {
+    const result = await readFileAsHTML(file);
+    statusEl.style.display = 'none';
+    contentEl.style.display = 'block';
+    contentEl.dataset.mode = result.mode;
+    contentEl.innerHTML = result.html;
+    window.scrollTo(0, 0);
+  } catch (err) {
+    console.error(err);
+    showStatus(`读取失败: ${err.message}`, true);
+  }
+}
+
+function setGCSStatus(msg, isError) {
+  gcsStatusEl.textContent = msg;
+  gcsStatusEl.classList.toggle('error', Boolean(isError));
+}
+
+async function refreshGCSFiles() {
+  setGCSStatus('加载中...');
+  gcsListEl.innerHTML = '';
+
+  try {
+    const res = await fetch(`${apiBase()}/gcs/list`);
+    if (!res.ok) {
+      const body = (await res.text()).trim();
+      throw new Error(body || `HTTP ${res.status}`);
+    }
+
+    const payload = await res.json();
+    gcsFiles = Array.isArray(payload) ? payload : (payload.files || []);
+    if (!Array.isArray(payload) && payload.prefix) {
+      gcsPrefixEl.textContent = payload.prefix;
+      gcsPrefixEl.title = payload.prefix;
+    }
+
+    renderGCSList(gcsFiles);
+    setGCSStatus(gcsFiles.length ? `${gcsFiles.length} 个文件` : '没有文件');
+  } catch (err) {
+    console.error(err);
+    gcsFiles = [];
+    renderGCSList(gcsFiles);
+    setGCSStatus(`读取失败: ${err.message}`, true);
+  }
+}
+
+function renderGCSList(files) {
+  gcsListEl.innerHTML = '';
+  for (const file of files) {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'library-item' + (file.name === activeGCSName ? ' active' : '');
+    item.title = file.name;
+    item.innerHTML = `
+      <span class="library-name">${escapeHTML(baseName(file.name))}</span>
+      <span class="library-path">${escapeHTML(dirName(file.name))}</span>
+      <span class="library-meta">${formatSize(file.size)}</span>
+    `;
+    item.addEventListener('click', () => openGCSFile(file.name));
+    gcsListEl.appendChild(item);
+  }
+}
+
+function baseName(path) {
+  const parts = String(path).split('/').filter(Boolean);
+  return parts[parts.length - 1] || path;
+}
+
+function dirName(path) {
+  const idx = String(path).lastIndexOf('/');
+  return idx >= 0 ? path.slice(0, idx + 1) : '';
+}
+
+function formatSize(bytes) {
+  if (!Number.isFinite(bytes)) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let size = bytes / 1024;
+  let unit = units.shift();
+  while (size >= 1024 && units.length) {
+    size /= 1024;
+    unit = units.shift();
+  }
+  return `${size.toFixed(size >= 10 ? 0 : 1)} ${unit}`;
+}
+
+async function openGCSFile(name) {
+  activeGCSName = name;
+  renderGCSList(gcsFiles);
+  showStatus(`读取中  ${name}`);
+
+  try {
+    const res = await fetch(`${apiBase()}/gcs/download?name=${encodeURIComponent(name)}`);
+    if (!res.ok) {
+      const body = (await res.text()).trim();
+      throw new Error(body || `HTTP ${res.status}`);
+    }
+
+    const blob = await res.blob();
+    const file = new File([blob], baseName(name), { type: blob.type || 'application/octet-stream' });
+    await openReaderFile(file, name);
+  } catch (err) {
+    console.error(err);
+    showStatus(`读取失败: ${err.message}`, true);
+  }
+}
+
+refreshGCSFiles();
+
+// ---- CSV ----
+function parseCSV(text) {
+  const rows = [];
+  let row = [], field = '', inQ = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQ) {
+      if (c === '"' && text[i+1] === '"') { field += '"'; i++; }
+      else if (c === '"') inQ = false;
+      else field += c;
+    } else {
+      if (c === '"') inQ = true;
+      else if (c === ',') { row.push(field); field = ''; }
+      else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
+      else if (c === '\r') { /* skip */ }
+      else field += c;
+    }
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
+function csvToTable(text) {
+  const rows = parseCSV(text);
+  if (!rows.length) return '<p><em>(空文件)</em></p>';
+  let html = '<table class="csv-table"><tbody>';
+  for (const r of rows) {
+    html += '<tr>' + r.map(c => `<td>${escapeHTML(c)}</td>`).join('') + '</tr>';
+  }
+  html += '</tbody></table>';
+  return html;
+}
+
+// ---- PDF ----
+async function loadPDF(file) {
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  let out = '';
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const tc = await page.getTextContent();
+    // Reconstruct line breaks based on Y position
+    let lastY = null, text = '';
+    for (const it of tc.items) {
+      const y = it.transform[5];
+      if (lastY !== null && Math.abs(y - lastY) > 4) text += '\n';
+      text += it.str + (it.hasEOL ? '\n' : ' ');
+      lastY = y;
+    }
+    out += `<div class="page-break">page ${i} / ${pdf.numPages}</div>\n${escapeHTML(text)}\n\n`;
+  }
+  return out;
+}
+
+// ---- DOCX ----
+async function loadDocx(file) {
+  const buf = await file.arrayBuffer();
+  const result = await mammoth.convertToHtml({ arrayBuffer: buf });
+  return result.value;
+}
+
+// ---- EPUB ----
+async function loadEpub(file) {
+  const buf = await file.arrayBuffer();
+  const zip = await JSZip.loadAsync(buf);
+
+  const containerFile = zip.file('META-INF/container.xml');
+  if (!containerFile) throw new Error('Invalid EPUB (no container.xml)');
+  const containerXml = await containerFile.async('string');
+  const opfMatch = containerXml.match(/full-path="([^"]+)"/);
+  if (!opfMatch) throw new Error('Invalid EPUB (no rootfile)');
+  const opfPath = opfMatch[1];
+  const opfDir = opfPath.includes('/') ? opfPath.substring(0, opfPath.lastIndexOf('/') + 1) : '';
+
+  const opf = await zip.file(opfPath).async('string');
+  const parser = new DOMParser();
+  const opfDoc = parser.parseFromString(opf, 'application/xml');
+
+  const items = {};
+  opfDoc.querySelectorAll('manifest item').forEach(it => {
+    items[it.getAttribute('id')] = it.getAttribute('href');
+  });
+  const spine = [...opfDoc.querySelectorAll('spine itemref')]
+    .map(ir => items[ir.getAttribute('idref')])
+    .filter(Boolean);
+
+  let out = '';
+  for (const href of spine) {
+    const fullPath = (opfDir + href).replace(/\/\.\//g, '/');
+    const f = zip.file(fullPath);
+    if (!f) continue;
+    const html = await f.async('string');
+    const doc = parser.parseFromString(html, 'text/html');
+    doc.querySelectorAll('script, style, link').forEach(n => n.remove());
+    // Strip inline styles to let our CSS dictate
+    doc.querySelectorAll('[style]').forEach(n => n.removeAttribute('style'));
+    out += (doc.body ? doc.body.innerHTML : '') +
+           '<div class="page-break">·</div>';
+  }
+  return out;
+}
+
+// ========================================================
+//  Selection → play + translate popup
+// ========================================================
+const popup       = $('popup');
+const popupHeader = $('popup-header');
+const popupFrame  = $('popup-frame');
+const popupWord   = $('popup-word');
+const popupLoad   = $('popup-loading');
+const closeBtn    = $('close-btn');
+const saveBtn     = $('save-btn');
+const replayBtn   = $('replay-btn');
+
+let selectionTimer = null;
+let currentWord = '';
+let currentSl = 'en';
+
+function detectLang(text) {
+  return /[\u4e00-\u9fff]/.test(text) ? 'zh-CN' : 'en';
+}
+
+function isInPopup(el) {
+  while (el) {
+    if (el === popup) return true;
+    el = el.parentNode;
+  }
+  return false;
+}
+
+function isReaderChrome(el) {
+  return el && el.closest && el.closest('header, .library, #popup');
+}
+
+let popupDrag = null;
+
+function clamp(n, min, max) {
+  return Math.min(Math.max(n, min), max);
+}
+
+function placePopup(left, top, width, height) {
+  const margin = 8;
+  const maxLeft = Math.max(margin, window.innerWidth - width - margin);
+  const maxTop = Math.max(margin, window.innerHeight - height - margin);
+  popup.style.left = `${clamp(left, margin, maxLeft)}px`;
+  popup.style.top = `${clamp(top, margin, maxTop)}px`;
+  popup.style.right = 'auto';
+  popup.style.bottom = 'auto';
+}
+
+popupHeader.addEventListener('pointerdown', (e) => {
+  if ((e.button !== undefined && e.button !== 0) || e.target.closest('button')) return;
+
+  const rect = popup.getBoundingClientRect();
+  popupDrag = {
+    offsetX: e.clientX - rect.left,
+    offsetY: e.clientY - rect.top,
+    width: rect.width,
+    height: rect.height,
+  };
+
+  popup.classList.add('dragging');
+  popup.style.width = `${rect.width}px`;
+  popup.style.height = `${rect.height}px`;
+  popupHeader.setPointerCapture(e.pointerId);
+  e.preventDefault();
+});
+
+popupHeader.addEventListener('pointermove', (e) => {
+  if (!popupDrag) return;
+  placePopup(
+    e.clientX - popupDrag.offsetX,
+    e.clientY - popupDrag.offsetY,
+    popupDrag.width,
+    popupDrag.height
+  );
+  e.preventDefault();
+});
+
+function endPopupDrag(e) {
+  if (!popupDrag) return;
+  popupDrag = null;
+  popup.classList.remove('dragging');
+  if (popupHeader.hasPointerCapture(e.pointerId)) {
+    popupHeader.releasePointerCapture(e.pointerId);
+  }
+}
+
+popupHeader.addEventListener('pointerup', endPopupDrag);
+popupHeader.addEventListener('pointercancel', endPopupDrag);
+
+window.addEventListener('resize', () => {
+  if (!popup.classList.contains('visible') || !popup.style.left || !popup.style.top) return;
+  const rect = popup.getBoundingClientRect();
+  placePopup(rect.left, rect.top, rect.width, rect.height);
+});
+
+function normalizeSelectedWord(text) {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) return '';
+
+  let word = trimmed.replace(
+    /^[\s"'“”‘’([{<]+|[\s"'“”‘’)\]}>.,;:!?，。！？、；：]+$/g,
+    ''
+  );
+  if (!word || /\s/.test(word)) return '';
+
+  // Commas, slashes, brackets, and sentence punctuation usually mean the user
+  // selected more than one token or a fragment that should not trigger lookup.
+  if (/[,，;；:：.!?！？。、《》\/\\|()[\]{}<>]/.test(word)) return '';
+
+  return word;
+}
+
+document.addEventListener('mouseup', (e) => {
+  if (isInPopup(e.target) || isReaderChrome(e.target)) return;
+
+  clearTimeout(selectionTimer);
+  const delay = parseInt(delayInput.value, 10) || 0;
+
+  selectionTimer = setTimeout(() => {
+    const sel = window.getSelection();
+    const text = (sel ? sel.toString() : '').trim();
+    const word = normalizeSelectedWord(text);
+    if (!word) return;
+    if (word === currentWord) return;
+    handleSelection(word);
+  }, delay);
+});
+
+function handleSelection(text) {
+  currentWord = text;
+  currentSl   = detectLang(text);
+  const tl    = currentSl === 'en' ? 'zh-CN' : 'en';
+
+  // 1. Server-side TTS (fire and forget; no-cors so works even without CORS header)
+  if (autoplayChk.checked) {
+    fetch(`${apiBase()}/play?text=${encodeURIComponent(text)}`, { mode: 'no-cors' })
+      .catch(err => console.warn('play failed', err));
+  }
+
+  // 2. Translation iframe — never needs CORS
+  popupWord.textContent = text;
+  popupLoad.classList.add('show');
+  popupFrame.onload = () => popupLoad.classList.remove('show');
+  popupFrame.src = `${apiBase()}/?text=${encodeURIComponent(text)}&sl=${currentSl}&tl=${tl}`;
+
+  popup.classList.add('visible');
+}
+
+closeBtn.addEventListener('click', () => {
+  popup.classList.remove('visible');
+  popupFrame.src = 'about:blank';
+  currentWord = '';
+  window.getSelection().removeAllRanges();
+});
+
+replayBtn.addEventListener('click', () => {
+  if (!currentWord) return;
+  fetch(`${apiBase()}/play?text=${encodeURIComponent(currentWord)}`, { mode: 'no-cors' })
+    .catch(err => console.warn('play failed', err));
+});
+
+// Esc to close
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && popup.classList.contains('visible')) {
+    closeBtn.click();
+  }
+});
+
+// ========================================================
+//  Save to wrong-book
+// ========================================================
+saveBtn.addEventListener('click', async () => {
+  if (!currentWord) return;
+
+  // Try to read translation text from iframe (works if same-origin)
+  let translated = '';
+  try {
+    const doc = popupFrame.contentDocument;
+    if (doc && doc.body) {
+      translated = (doc.body.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+    }
+  } catch (_) { /* cross-origin */ }
+
+  const url = `${apiBase()}/save?text=${encodeURIComponent(currentWord)}` +
+              `&translated=${encodeURIComponent(translated)}` +
+              `&sl=${currentSl}`;
+
+  // Try with CORS first (so we can read "ok" / "exists"); fall back to no-cors
+  try {
+    const res = await fetch(url);
+    const txt = (await res.text()).trim();
+    flash(txt === 'exists' ? '已在错题本' : '已收藏 ✓');
+  } catch (err) {
+    // CORS error path — fire blind and assume success
+    try {
+      await fetch(url, { mode: 'no-cors' });
+      flash('已发送 (无 CORS 头, 无法确认结果)');
+    } catch (e2) {
+      flash('保存失败: ' + e2.message, true);
+    }
+  }
+});
+
+function flash(msg, isError) {
+  const el = document.createElement('div');
+  el.className = 'flash' + (isError ? ' error' : '');
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 1800);
+}
+</script>
+</body>
+</html>
