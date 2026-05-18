@@ -12,6 +12,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
 
 <style>
 :root {
@@ -254,7 +256,64 @@ button.primary:hover { background: #9D4C2E; }
   padding-right: 2px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
+}
+
+.library-folder {
+  margin: 1px 0;
+}
+
+.library-folder > summary {
+  list-style: none;
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+  color: var(--ink-soft);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 7px 8px;
+  cursor: pointer;
+  user-select: none;
+}
+.library-folder > summary::-webkit-details-marker { display: none; }
+.library-folder > summary::before {
+  content: '›';
+  color: var(--gcp);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  line-height: 1;
+  transition: transform 0.15s ease;
+}
+.library-folder[open] > summary::before { transform: rotate(90deg); }
+.library-folder > summary:hover {
+  background: rgba(227, 239, 234, 0.65);
+  border-color: rgba(47, 111, 99, 0.16);
+}
+
+.library-folder-name {
+  font-family: 'Newsreader', 'Source Han Serif SC', serif;
+  font-size: 15px;
+  line-height: 1.2;
+  color: var(--gcp);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-count {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--ink-soft);
+}
+
+.library-folder-children {
+  margin-left: 14px;
+  padding-left: 9px;
+  border-left: 1px solid rgba(47, 111, 99, 0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .library-item {
@@ -266,7 +325,7 @@ button.primary:hover { background: #9D4C2E; }
   color: var(--ink);
   border: 1px solid transparent;
   border-radius: 4px;
-  padding: 9px 10px;
+  padding: 8px 9px;
   letter-spacing: 0;
   text-transform: none;
 }
@@ -393,7 +452,62 @@ main {
 #content p { margin: 0.7em 0; }
 #content a { color: var(--accent); }
 #content ul, #content ol { padding-left: 24px; }
+#content li { margin: 0.25em 0; }
 #content img { max-width: 100%; height: auto; }
+#content blockquote {
+  margin: 1.2em 0;
+  padding: 2px 0 2px 18px;
+  border-left: 3px solid var(--accent-soft);
+  color: var(--ink-soft);
+  font-style: italic;
+}
+#content hr {
+  border: 0;
+  border-top: 1px solid var(--rule);
+  margin: 32px 0;
+}
+#content code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.86em;
+  background: rgba(168, 138, 69, 0.12);
+  border: 1px solid rgba(168, 138, 69, 0.16);
+  border-radius: 3px;
+  padding: 0.1em 0.28em;
+}
+#content pre {
+  overflow: auto;
+  padding: 14px 16px;
+  background: var(--bg-elev);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  line-height: 1.55;
+}
+#content pre code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+}
+#content table {
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 16px;
+  width: 100%;
+}
+#content th,
+#content td {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--rule);
+  vertical-align: top;
+}
+#content th {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-soft);
+  text-align: left;
+  border-bottom: 1.5px solid var(--ink);
+}
 #content table.csv-table {
   border-collapse: collapse;
   margin: 16px 0;
@@ -621,7 +735,7 @@ main {
       <span class="switch"></span>
       <span class="ctrl-label">Play</span>
     </label>
-    <input type="file" id="file-input" accept=".txt,.csv,.md,.pdf,.docx,.epub" hidden>
+    <input type="file" id="file-input" accept=".txt,.csv,.md,.markdown,.pdf,.docx,.epub" hidden>
     <button id="load-btn" class="primary">打开文件</button>
   </div>
 </header>
@@ -715,6 +829,7 @@ const gcsRefreshBtn = $('gcs-refresh');
 
 let gcsFiles = [];
 let activeGCSName = '';
+let openGCSFolders = new Set(JSON.parse(localStorage.getItem('lexica.gcs.openFolders') || '[]'));
 
 loadBtn.addEventListener('click', () => fileInput.click());
 gcsRefreshBtn.addEventListener('click', refreshGCSFiles);
@@ -742,17 +857,111 @@ function escapeHTML(s) {
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+function renderMarkdown(text, sourceName) {
+  if (window.marked) {
+    marked.setOptions({ gfm: true, breaks: false, headerIds: false, mangle: false });
+    const rendered = marked.parse(text);
+    const safeHTML = window.DOMPurify ? DOMPurify.sanitize(rendered) : rendered;
+    return rewriteMarkdownLinks(safeHTML, sourceName);
+  }
+
+  const blocks = [];
+  let inCode = false;
+  let code = [];
+  for (const line of String(text).split(/\r?\n/)) {
+    if (line.startsWith('```')) {
+      if (inCode) {
+        blocks.push(`<pre><code>${escapeHTML(code.join('\n'))}</code></pre>`);
+        code = [];
+      }
+      inCode = !inCode;
+      continue;
+    }
+    if (inCode) {
+      code.push(line);
+      continue;
+    }
+    const heading = line.match(/^(#{1,4})\s+(.+)$/);
+    if (heading) {
+      blocks.push(`<h${heading[1].length}>${escapeHTML(heading[2])}</h${heading[1].length}>`);
+    } else if (line.trim()) {
+      blocks.push(`<p>${escapeHTML(line)}</p>`);
+    }
+  }
+  if (code.length) blocks.push(`<pre><code>${escapeHTML(code.join('\n'))}</code></pre>`);
+  return rewriteMarkdownLinks(blocks.join('\n'), sourceName);
+}
+
+function rewriteMarkdownLinks(html, sourceName) {
+  const baseDir = dirName(sourceName || '');
+  if (!baseDir) return html;
+
+  const template = document.createElement('template');
+  template.innerHTML = html;
+
+  template.content.querySelectorAll('img[src]').forEach(img => {
+    const src = img.getAttribute('src');
+    if (!isRelativeURL(src)) return;
+    img.src = `${apiBase()}/gcs/download?name=${encodeURIComponent(joinGCSPath(baseDir, stripURLSuffix(src)))}`;
+  });
+
+  template.content.querySelectorAll('a[href]').forEach(link => {
+    const href = link.getAttribute('href');
+    if (!isRelativeURL(href)) return;
+
+    const gcsName = joinGCSPath(baseDir, stripURLSuffix(href));
+    if (isReaderSupported(gcsName)) {
+      link.href = '#';
+      link.dataset.gcsName = gcsName;
+    } else {
+      link.href = `${apiBase()}/gcs/download?name=${encodeURIComponent(gcsName)}`;
+      link.target = '_blank';
+      link.rel = 'noopener';
+    }
+  });
+
+  return template.innerHTML;
+}
+
+function isRelativeURL(value) {
+  if (!value) return false;
+  return !/^(?:[a-z][a-z0-9+.-]*:|#|\/)/i.test(value);
+}
+
+function stripURLSuffix(value) {
+  const idx = String(value).search(/[?#]/);
+  return idx === -1 ? value : value.slice(0, idx);
+}
+
+function joinGCSPath(baseDir, relPath) {
+  const parts = (baseDir + relPath).split('/');
+  const out = [];
+  for (const part of parts) {
+    if (!part || part === '.') continue;
+    if (part === '..') out.pop();
+    else out.push(part);
+  }
+  return out.join('/');
+}
+
+function isReaderSupported(name) {
+  return ['txt', 'csv', 'md', 'markdown', 'pdf', 'docx', 'epub'].includes(fileExt(name));
+}
+
 function fileExt(name) {
   return (name.split('.').pop() || '').toLowerCase();
 }
 
-async function readFileAsHTML(file) {
+async function readFileAsHTML(file, sourceName) {
   const ext = fileExt(file.name);
   let html = '', mode = 'rich';
 
-  if (ext === 'txt' || ext === 'md') {
+  if (ext === 'txt') {
     html = escapeHTML(await file.text());
     mode = 'plain';
+  } else if (ext === 'md' || ext === 'markdown') {
+    html = renderMarkdown(await file.text(), sourceName);
+    mode = 'markdown';
   } else if (ext === 'csv') {
     html = csvToTable(await file.text());
   } else if (ext === 'pdf') {
@@ -773,7 +982,7 @@ async function openReaderFile(file, label) {
   showStatus(`读取中  ${label}`);
 
   try {
-    const result = await readFileAsHTML(file);
+    const result = await readFileAsHTML(file, label);
     statusEl.style.display = 'none';
     contentEl.style.display = 'block';
     contentEl.dataset.mode = result.mode;
@@ -784,6 +993,14 @@ async function openReaderFile(file, label) {
     showStatus(`读取失败: ${err.message}`, true);
   }
 }
+
+contentEl.addEventListener('click', (e) => {
+  if (!e.target.closest) return;
+  const link = e.target.closest('a[data-gcs-name]');
+  if (!link) return;
+  e.preventDefault();
+  openGCSFile(link.dataset.gcsName);
+});
 
 function setGCSStatus(msg, isError) {
   gcsStatusEl.textContent = msg;
@@ -820,19 +1037,86 @@ async function refreshGCSFiles() {
 
 function renderGCSList(files) {
   gcsListEl.innerHTML = '';
+  const tree = buildGCSFileTree(files);
+  renderGCSNode(tree, gcsListEl, 0);
+}
+
+function buildGCSFileTree(files) {
+  const root = { name: '', path: '', dirs: new Map(), files: [] };
   for (const file of files) {
+    const parts = String(file.name || '').split('/').filter(Boolean);
+    if (!parts.length) continue;
+
+    let node = root;
+    let path = '';
+    for (const part of parts.slice(0, -1)) {
+      path += part + '/';
+      if (!node.dirs.has(part)) {
+        node.dirs.set(part, { name: part, path, dirs: new Map(), files: [] });
+      }
+      node = node.dirs.get(part);
+    }
+    node.files.push(file);
+  }
+  return root;
+}
+
+function renderGCSNode(node, container, depth) {
+  const dirs = [...node.dirs.values()].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  for (const dir of dirs) {
+    const details = document.createElement('details');
+    details.className = 'library-folder';
+    details.open = depth === 0 || openGCSFolders.has(dir.path) || hasActiveDescendant(dir);
+
+    const summary = document.createElement('summary');
+    summary.title = dir.path;
+    summary.innerHTML = `
+      <span class="library-folder-name">${escapeHTML(dir.name)}</span>
+      <span class="library-count">${countFiles(dir)}</span>
+    `;
+
+    const children = document.createElement('div');
+    children.className = 'library-folder-children';
+    renderGCSNode(dir, children, depth + 1);
+
+    details.addEventListener('toggle', () => {
+      if (details.open) openGCSFolders.add(dir.path);
+      else openGCSFolders.delete(dir.path);
+      localStorage.setItem('lexica.gcs.openFolders', JSON.stringify([...openGCSFolders]));
+    });
+
+    details.append(summary, children);
+    container.appendChild(details);
+  }
+
+  const nodeFiles = [...node.files].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  for (const file of nodeFiles) {
     const item = document.createElement('button');
     item.type = 'button';
     item.className = 'library-item' + (file.name === activeGCSName ? ' active' : '');
     item.title = file.name;
     item.innerHTML = `
       <span class="library-name">${escapeHTML(baseName(file.name))}</span>
-      <span class="library-path">${escapeHTML(dirName(file.name))}</span>
       <span class="library-meta">${formatSize(file.size)}</span>
     `;
     item.addEventListener('click', () => openGCSFile(file.name));
-    gcsListEl.appendChild(item);
+    container.appendChild(item);
   }
+}
+
+function countFiles(node) {
+  let count = node.files.length;
+  for (const child of node.dirs.values()) count += countFiles(child);
+  return count;
+}
+
+function hasActiveDescendant(node) {
+  if (!activeGCSName) return false;
+  if (node.files.some(file => file.name === activeGCSName)) return true;
+  for (const child of node.dirs.values()) {
+    if (hasActiveDescendant(child)) return true;
+  }
+  return false;
 }
 
 function baseName(path) {
