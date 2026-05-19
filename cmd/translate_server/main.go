@@ -20,6 +20,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"cloud.google.com/go/storage"
 	"google.golang.org/api/iterator"
@@ -952,6 +953,450 @@ func lexicaHandler() http.HandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
+// Dictation endpoints
+// ---------------------------------------------------------------------------
+
+const gcsDailyWordPrefix = "study-english/vocabulary-list/daily_english_word/"
+
+// dictationDaysHandler – GET /dictation/days → JSON list of available day numbers
+func dictationDaysHandler(bucketName, credPath string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeCORSHeaders(w)
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		ctx := context.Background()
+		client, err := newGCSClient(ctx, credPath)
+		if err != nil {
+			log.Printf("[dictation/days] client error: %v", err)
+			http.Error(w, "GCS client error", http.StatusInternalServerError)
+			return
+		}
+		defer client.Close()
+
+		var days []string
+		it := client.Bucket(bucketName).Objects(ctx, &storage.Query{Prefix: gcsDailyWordPrefix})
+		for {
+			attrs, err := it.Next()
+			if err == iterator.Done {
+				break
+			}
+			if err != nil {
+				log.Printf("[dictation/days] iterator error: %v", err)
+				http.Error(w, "GCS error", http.StatusInternalServerError)
+				return
+			}
+			name := strings.TrimPrefix(attrs.Name, gcsDailyWordPrefix)
+			if strings.HasSuffix(name, ".txt") && !strings.Contains(name, "/") {
+				days = append(days, strings.TrimSuffix(name, ".txt"))
+			}
+		}
+		sort.Strings(days)
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		json.NewEncoder(w).Encode(days)
+	}
+}
+
+// DictationWord is a single word entry returned to the frontend
+type DictationWord struct {
+	English string `json:"english"`
+	Chinese string `json:"chinese"`
+}
+
+// dictationWordsHandler – GET /dictation/words?day=XX → JSON word list
+func dictationWordsHandler(bucketName, credPath string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeCORSHeaders(w)
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		day := r.URL.Query().Get("day")
+		if day == "" {
+			http.Error(w, "missing day parameter", http.StatusBadRequest)
+			return
+		}
+
+		objectName := gcsDailyWordPrefix + day + ".txt"
+
+		ctx := context.Background()
+		client, err := newGCSClient(ctx, credPath)
+		if err != nil {
+			log.Printf("[dictation/words] client error: %v", err)
+			http.Error(w, "GCS client error", http.StatusInternalServerError)
+			return
+		}
+		defer client.Close()
+
+		reader, err := client.Bucket(bucketName).Object(objectName).NewReader(ctx)
+		if err != nil {
+			log.Printf("[dictation/words] read error for %s: %v", objectName, err)
+			http.Error(w, "file not found: "+day+".txt", http.StatusNotFound)
+			return
+		}
+		defer reader.Close()
+
+		data, err := io.ReadAll(reader)
+		if err != nil {
+			http.Error(w, "read error", http.StatusInternalServerError)
+			return
+		}
+
+		var words []DictationWord
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				words = append(words, DictationWord{
+					English: fields[0],
+					Chinese: strings.Join(fields[1:], " "),
+				})
+			}
+		}
+
+		log.Printf("[dictation] loaded %d words from %s", len(words), objectName)
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		json.NewEncoder(w).Encode(words)
+	}
+}
+
+// dictationTTSHandler – GET /dictation/tts?text=X → MP3 audio
+// Uses the same TTS cache as gsay / translate_server play
+func dictationTTSHandler(ttsKey string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeCORSHeaders(w)
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		text := r.URL.Query().Get("text")
+		if text == "" {
+			http.Error(w, "missing text", http.StatusBadRequest)
+			return
+		}
+
+		// 1. Check disk/memory cache
+		if cachedPath, ok := ttsCache.Load(text); ok {
+			mp3Path := cachedPath.(string)
+			if data, err := os.ReadFile(mp3Path); err == nil {
+				log.Printf("[dictation tts cache hit] %s", text)
+				w.Header().Set("Content-Type", "audio/mpeg")
+				w.Header().Set("Cache-Control", "public, max-age=86400")
+				w.Write(data)
+				return
+			}
+		}
+
+		// 2. Synthesize via Google TTS API
+		audioBytes, err := synthesizeTTS(ttsKey, text)
+		if err != nil {
+			log.Printf("[dictation tts error] %v", err)
+			http.Error(w, "TTS synthesis failed", http.StatusInternalServerError)
+			return
+		}
+
+		// 3. Save to disk cache
+		mp3Path := saveTTSAudio(text, audioBytes)
+		if mp3Path != "" {
+			ttsCache.Store(text, mp3Path)
+			log.Printf("[dictation tts cached] %s → %s", text, mp3Path)
+		}
+
+		w.Header().Set("Content-Type", "audio/mpeg")
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		w.Write(audioBytes)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Dictation traces + Gemini AI analysis
+// ---------------------------------------------------------------------------
+
+// Default Gemini/Gemma model. Override via GEMINI_MODEL env if needed.
+const defaultGeminiModel = "gemma-4-31b-it"
+
+type TraceWord struct {
+	English    string   `json:"english"`
+	Chinese    string   `json:"chinese"`
+	Attempts   []string `json:"attempts"`
+	Skipped    bool     `json:"skipped"`
+	FirstTryOK bool     `json:"firstTryOK"`
+	ErrorCount int      `json:"errorCount"`
+}
+
+type TraceRecord struct {
+	ID              string      `json:"id"`
+	Timestamp       string      `json:"timestamp"` // RFC3339 in +08:00
+	DayName         string      `json:"dayName"`
+	Mode            string      `json:"mode"`
+	Words           []TraceWord `json:"words"`
+	Total           int         `json:"total"`
+	FirstTryCorrect int         `json:"firstTryCorrect"`
+	Wrong           int         `json:"wrong"`
+}
+
+func tracesDir() string {
+	return filepath.Join(projectRoot, "data", "translate_server", "traces")
+}
+
+// traceRecordHandler – POST /trace/record  (body: TraceRecord JSON)
+func traceRecordHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeCORSHeaders(w)
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		var rec TraceRecord
+		if err := json.NewDecoder(r.Body).Decode(&rec); err != nil {
+			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		loc := time.FixedZone("UTC+8", 8*60*60)
+		now := time.Now().In(loc)
+		if rec.Timestamp == "" {
+			rec.Timestamp = now.Format(time.RFC3339)
+		}
+		if rec.ID == "" {
+			rec.ID = now.Format("20060102-150405") + fmt.Sprintf("-%d", now.UnixNano()%1000)
+		}
+		if err := os.MkdirAll(tracesDir(), 0755); err != nil {
+			log.Printf("[trace mkdir] %v", err)
+			http.Error(w, "mkdir failed", http.StatusInternalServerError)
+			return
+		}
+		path := filepath.Join(tracesDir(), rec.ID+".json")
+		data, err := json.MarshalIndent(rec, "", "  ")
+		if err != nil {
+			http.Error(w, "marshal failed", http.StatusInternalServerError)
+			return
+		}
+		if err := os.WriteFile(path, data, 0644); err != nil {
+			log.Printf("[trace save] %v", err)
+			http.Error(w, "save failed", http.StatusInternalServerError)
+			return
+		}
+		log.Printf("[trace saved] %s (%s, %d words)", rec.ID, rec.DayName, len(rec.Words))
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"id": rec.ID})
+	}
+}
+
+type traceListItem struct {
+	ID              string `json:"id"`
+	Timestamp       string `json:"timestamp"`
+	DayName         string `json:"dayName"`
+	Mode            string `json:"mode"`
+	Total           int    `json:"total"`
+	FirstTryCorrect int    `json:"firstTryCorrect"`
+	Wrong           int    `json:"wrong"`
+}
+
+// traceListHandler – GET /trace/list → JSON array (newest first)
+func traceListHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeCORSHeaders(w)
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		entries, err := os.ReadDir(tracesDir())
+		if err != nil {
+			if os.IsNotExist(err) {
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte("[]"))
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		items := []traceListItem{}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(tracesDir(), e.Name()))
+			if err != nil {
+				continue
+			}
+			var rec TraceRecord
+			if err := json.Unmarshal(data, &rec); err != nil {
+				continue
+			}
+			items = append(items, traceListItem{
+				ID: rec.ID, Timestamp: rec.Timestamp, DayName: rec.DayName,
+				Mode: rec.Mode, Total: rec.Total,
+				FirstTryCorrect: rec.FirstTryCorrect, Wrong: rec.Wrong,
+			})
+		}
+		sort.Slice(items, func(i, j int) bool { return items[i].Timestamp > items[j].Timestamp })
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(items)
+	}
+}
+
+// traceDeleteHandler – DELETE|POST /trace/delete?id=X
+func traceDeleteHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeCORSHeaders(w)
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.Method != http.MethodDelete && r.Method != http.MethodPost {
+			http.Error(w, "DELETE or POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		id := r.URL.Query().Get("id")
+		if id == "" {
+			http.Error(w, "missing id", http.StatusBadRequest)
+			return
+		}
+		if strings.ContainsAny(id, "/\\") || strings.Contains(id, "..") {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+		path := filepath.Join(tracesDir(), id+".json")
+		if err := os.Remove(path); err != nil {
+			if os.IsNotExist(err) {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			log.Printf("[trace delete] %v", err)
+			http.Error(w, "delete failed", http.StatusInternalServerError)
+			return
+		}
+		log.Printf("[trace deleted] %s", id)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"id": id, "status": "deleted"})
+	}
+}
+
+// callGemini calls Google Generative Language API with the given prompt
+func callGemini(apiKey, model, prompt string) (string, error) {
+	endpoint := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s",
+		url.PathEscape(model), url.QueryEscape(apiKey))
+
+	body := map[string]any{
+		"contents": []map[string]any{
+			{"role": "user", "parts": []map[string]string{{"text": prompt}}},
+		},
+	}
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return "", err
+	}
+	resp, err := http.Post(endpoint, "application/json", bytes.NewReader(jsonBody))
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("gemini %d: %s", resp.StatusCode, string(respBody))
+	}
+	var result struct {
+		Candidates []struct {
+			Content struct {
+				Parts []struct {
+					Text string `json:"text"`
+				} `json:"parts"`
+			} `json:"content"`
+		} `json:"candidates"`
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return "", fmt.Errorf("parse: %w (body: %s)", err, string(respBody))
+	}
+	if len(result.Candidates) == 0 || len(result.Candidates[0].Content.Parts) == 0 {
+		return "", fmt.Errorf("empty response: %s", string(respBody))
+	}
+	var sb strings.Builder
+	for _, p := range result.Candidates[0].Content.Parts {
+		sb.WriteString(p.Text)
+	}
+	return sb.String(), nil
+}
+
+// traceAskHandler – POST /trace/ask  (body: {ids: [...], question: "..."})
+func traceAskHandler(apiKey, model string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeCORSHeaders(w)
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		if apiKey == "" {
+			http.Error(w, "GEMINI_API_KEY not set in .env", http.StatusInternalServerError)
+			return
+		}
+		var req struct {
+			IDs      []string `json:"ids"`
+			Question string   `json:"question"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		var recs []TraceRecord
+		for _, id := range req.IDs {
+			// prevent path traversal
+			if strings.ContainsAny(id, "/\\") || strings.Contains(id, "..") {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(tracesDir(), id+".json"))
+			if err != nil {
+				continue
+			}
+			var rec TraceRecord
+			if err := json.Unmarshal(data, &rec); err != nil {
+				continue
+			}
+			recs = append(recs, rec)
+		}
+		if len(recs) == 0 {
+			http.Error(w, "no traces matched the given ids", http.StatusBadRequest)
+			return
+		}
+		bodyJSON, _ := json.MarshalIndent(recs, "", "  ")
+		question := strings.TrimSpace(req.Question)
+		if question == "" {
+			question = "请分析以上单词听写练习记录：薄弱点、常见错误模式（拼写、发音相似、混淆词等），并给出针对性的复习建议。用中文回答，简洁清晰。"
+		}
+		prompt := fmt.Sprintf(
+			"你是一名英语单词听写助教。以下是用户的听写练习记录（JSON 格式），"+
+				"每个 word 含 english=正确单词、chinese=中文释义、attempts=用户尝试输入的序列、"+
+				"skipped=是否跳过、firstTryOK=是否一遍过、errorCount=错误次数。\n\n"+
+				"练习数据：\n%s\n\n用户问题：%s",
+			string(bodyJSON), question,
+		)
+		answer, err := callGemini(apiKey, model, prompt)
+		if err != nil {
+			log.Printf("[trace ask] %v", err)
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"answer": answer, "model": model})
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -984,6 +1429,17 @@ func main() {
 		log.Fatal("Set GOOGLE_TTS_API_KEY in .env")
 	}
 
+	geminiKey := strings.TrimSpace(os.Getenv("GEMINI_API_KEY"))
+	geminiModel := strings.TrimSpace(os.Getenv("GEMINI_MODEL"))
+	if geminiModel == "" {
+		geminiModel = defaultGeminiModel
+	}
+	if geminiKey == "" {
+		log.Println("[warn] GEMINI_API_KEY not set – /trace/ask will return an error")
+	} else {
+		log.Printf("[init] Gemini model: %s", geminiModel)
+	}
+
 	// GCS configuration
 	gcsBucket := os.Getenv("GCS_BUCKET")
 	if gcsBucket == "" {
@@ -1012,10 +1468,18 @@ func main() {
 	http.HandleFunc("/lexica", lexicaHandler())
 	http.HandleFunc("/gcs/list", gcsListHandler(gcsBucket, gcsPrefix, credPath))
 	http.HandleFunc("/gcs/download", gcsDownloadHandler(gcsBucket, gcsPrefix, credPath))
+	http.HandleFunc("/dictation/days", dictationDaysHandler(gcsBucket, credPath))
+	http.HandleFunc("/dictation/words", dictationWordsHandler(gcsBucket, credPath))
+	http.HandleFunc("/dictation/tts", dictationTTSHandler(ttsKey))
+	http.HandleFunc("/trace/record", traceRecordHandler())
+	http.HandleFunc("/trace/list", traceListHandler())
+	http.HandleFunc("/trace/delete", traceDeleteHandler())
+	http.HandleFunc("/trace/ask", traceAskHandler(geminiKey, geminiModel))
 
 	addr := "127.0.0.1:8080"
 	fmt.Printf("Listening on http://%s\n", addr)
 	fmt.Printf("  Lexica reader: http://%s/lexica\n", addr)
+	fmt.Printf("  Dictation:     http://%s/lexica (toggle button)\n", addr)
 	fmt.Printf("  GCS bucket: %s (prefix: %s)\n", gcsBucket, gcsPrefix)
 	log.Fatal(http.ListenAndServe(addr, nil))
 }
