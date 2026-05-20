@@ -712,11 +712,13 @@ const dictCloseBtn = $('dict-close-btn');
 const tabFiles = $('tab-files');
 const tabDictStrict = $('tab-dict-strict');
 const tabDictSkip = $('tab-dict-skip');
+const tabRecog = $('tab-recog');
 const tabTraces = $('tab-traces');
 const tabCleaner = $('tab-cleaner');
 const tabActivity = $('tab-activity');
 const sidebarFiles = $('sidebar-files');
 const sidebarDictInfo = $('sidebar-dict-info');
+const sidebarRecogInfo = $('sidebar-recog-info');
 const sidebarTraces = $('sidebar-traces');
 const sidebarCleaner = $('sidebar-cleaner');
 const sidebarActivity = $('sidebar-activity');
@@ -739,13 +741,14 @@ let dictState = {
 };
 
 function setActiveTab(tab) {
-  [tabFiles, tabDictStrict, tabDictSkip, tabTraces, tabCleaner, tabActivity].forEach(t => t.classList.remove('active'));
+  [tabFiles, tabDictStrict, tabDictSkip, tabRecog, tabTraces, tabCleaner, tabActivity].forEach(t => t.classList.remove('active'));
   if (tab) tab.classList.add('active');
 }
 
 function showSidebarContent(which) {
   sidebarFiles.classList.toggle('hidden', which !== 'files');
   sidebarDictInfo.classList.toggle('hidden', which !== 'dict');
+  sidebarRecogInfo.classList.toggle('hidden', which !== 'recog');
   sidebarTraces.classList.toggle('hidden', which !== 'traces');
   sidebarCleaner.classList.toggle('hidden', which !== 'cleaner');
   sidebarActivity.classList.toggle('hidden', which !== 'activity');
@@ -781,6 +784,7 @@ tabFiles.addEventListener('click', () => {
 
 tabDictStrict.addEventListener('click', () => openDictation('strict'));
 tabDictSkip.addEventListener('click', () => openDictation('skip'));
+tabRecog.addEventListener('click', () => openRecognition());
 tabTraces.addEventListener('click', () => {
   setActiveTab(tabTraces);
   showSidebarContent('traces');
@@ -913,6 +917,331 @@ dictCloseBtn.addEventListener('click', () => {
   setActiveTab(null);
   showSidebarContent(null);
 });
+
+// ========================================================
+//  Recognition Module
+// ========================================================
+const recogPanel = $('recognition-panel');
+const recogHeader = $('recog-header');
+const recogBody = $('recog-body');
+const recogCloseBtn = $('recog-close-btn');
+
+let recogState = {
+  words: [],
+  shuffled: [],
+  currentIdx: 0,
+  knownWords: [],
+  unknownWords: [],
+  dayName: '',
+};
+
+recogCloseBtn.addEventListener('click', () => {
+  recogPanel.classList.remove('visible');
+  setActiveTab(null);
+  showSidebarContent(null);
+});
+
+// Drag support for recognition panel
+let recogDrag = null;
+
+function recogPlacePanel(left, top, width, height) {
+  const margin = 8;
+  const maxLeft = Math.max(margin, window.innerWidth - width - margin);
+  const maxTop = Math.max(margin, window.innerHeight - height - margin);
+  recogPanel.style.left = `${clamp(left, margin, maxLeft)}px`;
+  recogPanel.style.top = `${clamp(top, margin, maxTop)}px`;
+  recogPanel.style.right = 'auto';
+  recogPanel.style.bottom = 'auto';
+}
+
+recogHeader.addEventListener('pointerdown', (e) => {
+  if ((e.button !== undefined && e.button !== 0) || e.target.closest('button')) return;
+  const rect = recogPanel.getBoundingClientRect();
+  recogDrag = { offsetX: e.clientX - rect.left, offsetY: e.clientY - rect.top, width: rect.width, height: rect.height };
+  recogPanel.classList.add('dragging');
+  recogPanel.style.width = `${rect.width}px`;
+  recogPanel.style.height = `${rect.height}px`;
+  recogHeader.setPointerCapture(e.pointerId);
+  e.preventDefault();
+});
+
+recogHeader.addEventListener('pointermove', (e) => {
+  if (!recogDrag) return;
+  recogPlacePanel(e.clientX - recogDrag.offsetX, e.clientY - recogDrag.offsetY, recogDrag.width, recogDrag.height);
+  e.preventDefault();
+});
+
+function endRecogDrag(e) {
+  if (!recogDrag) return;
+  recogDrag = null;
+  recogPanel.classList.remove('dragging');
+  if (recogHeader.hasPointerCapture(e.pointerId)) recogHeader.releasePointerCapture(e.pointerId);
+}
+
+recogHeader.addEventListener('pointerup', endRecogDrag);
+recogHeader.addEventListener('pointercancel', endRecogDrag);
+
+function openRecognition() {
+  setActiveTab(tabRecog);
+  showSidebarContent('recog');
+  recogPanel.classList.add('visible');
+  dictPanel.classList.remove('visible');
+  $('recog-title').textContent = '认词模式';
+  if (!recogState.words.length) {
+    recogShowSetup();
+  }
+}
+
+// ---- Recognition Setup Screen ----
+function recogShowSetup() {
+  recogBody.innerHTML = `
+<div class="dict-setup">
+  <div class="dict-setup-label">认哪一天？</div>
+  <div class="dict-day-grid" id="recog-day-grid"></div>
+  <div class="dict-loading" id="recog-load-msg"></div>
+</div>
+  `;
+
+  const grid = $('recog-day-grid');
+  const loadMsg = $('recog-load-msg');
+
+  for (let i = 1; i <= 21; i++) {
+    const num = i;
+    const dayName = `day${String(num).padStart(2, '0')}`;
+    const btn = document.createElement('button');
+    btn.className = 'dict-day-btn';
+    btn.textContent = String(num);
+    btn.addEventListener('click', async () => {
+      Array.from(grid.children).forEach(b => b.disabled = true);
+      loadMsg.textContent = `正在加载 ${dayName}.txt ...`;
+      try {
+        let res = await fetch(`${apiBase()}/dictation/words?day=${encodeURIComponent(dayName)}`);
+        let label = dayName;
+        if (!res.ok) {
+          res = await fetch(`${apiBase()}/dictation/words?day=${encodeURIComponent('day' + num)}`);
+          if (!res.ok) throw new Error(`找不到 day${num} 的单词文件`);
+          label = 'day' + num;
+        }
+        const words = await res.json();
+        recogShowPortionPicker(words, label);
+      } catch (err) {
+        loadMsg.textContent = `❌ ${err.message}`;
+        Array.from(grid.children).forEach(b => b.disabled = false);
+      }
+    });
+    grid.appendChild(btn);
+  }
+}
+
+// ---- Recognition Portion Picker ----
+function recogShowPortionPicker(allWords, dayName) {
+  const total = (allWords || []).length;
+  if (total === 0) {
+    flash('该文件中没有找到单词', true);
+    recogShowSetup();
+    return;
+  }
+  const q1 = Math.floor(total / 4);
+  const q2 = Math.floor(total / 2);
+  const q3 = Math.floor(3 * total / 4);
+
+  const portions = [
+    { label: '第 1/4', range: [0, q1] },
+    { label: '第 2/4', range: [q1, q2] },
+    { label: '第 3/4', range: [q2, q3] },
+    { label: '第 4/4', range: [q3, total] },
+    { label: '前 1/2', range: [0, q2] },
+    { label: '后 1/2', range: [q2, total] },
+    { label: '全部',  range: [0, total], full: true },
+  ];
+
+  let html = '';
+  for (const p of portions) {
+    const count = p.range[1] - p.range[0];
+    html += `<button class="dict-portion-btn${p.full ? ' full' : ''}">` +
+      `<span>${p.label}</span>` +
+      `<span class="dict-portion-count">${count} 词</span>` +
+      `</button>`;
+  }
+
+  recogBody.innerHTML = `
+<div class="dict-setup">
+  <div class="dict-setup-label">${escapeHTML(dayName)} · 选择认词范围</div>
+  <div class="dict-portion-grid" id="recog-portion-grid">${html}</div>
+  <button class="dict-back-btn" id="recog-back-btn">← 返回选择天数</button>
+</div>
+  `;
+
+  const grid = $('recog-portion-grid');
+  for (let i = 0; i < portions.length; i++) {
+    const p = portions[i];
+    grid.children[i].addEventListener('click', () => {
+      const slice = allWords.slice(p.range[0], p.range[1]);
+      recogStartSession(slice, `${dayName} · ${p.label}`);
+    });
+  }
+  $('recog-back-btn').addEventListener('click', recogShowSetup);
+}
+
+// ---- Recognition Start Session ----
+function recogStartSession(words, dayName) {
+  if (!words || !words.length) {
+    flash('该文件中没有找到单词', true);
+    recogShowSetup();
+    return;
+  }
+
+  const shuffled = [...words];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+
+  recogState = {
+    words,
+    shuffled,
+    currentIdx: 0,
+    knownWords: [],
+    unknownWords: [],
+    dayName,
+  };
+
+  $('recog-title').textContent = `认词 · ${dayName}`;
+  flash(`已加载 ${words.length} 个单词，开始认词！`);
+  recogShowQuestion();
+}
+
+// ---- Recognition Question Screen ----
+function recogShowQuestion() {
+  const s = recogState;
+  if (s.currentIdx >= s.shuffled.length) {
+    recogShowSummary();
+    return;
+  }
+
+  const word = s.shuffled[s.currentIdx];
+  const total = s.shuffled.length;
+  const current = s.currentIdx + 1;
+  const pct = ((current - 1) / total * 100).toFixed(1);
+
+  recogBody.innerHTML = `
+<div class="recog-question">
+  <div class="recog-progress">${current} / ${total}</div>
+  <div class="recog-progress-bar">
+    <div class="recog-progress-fill" style="width: ${pct}%"></div>
+  </div>
+  <div class="recog-english">${escapeHTML(word.english)}</div>
+  <div class="recog-chinese-reveal" id="recog-chinese" style="visibility:hidden">${escapeHTML(word.chinese)}</div>
+  <div class="recog-btn-row">
+    <button class="recog-no-btn" id="recog-no-btn">✗ 不认识</button>
+    <button class="recog-yes-btn" id="recog-yes-btn">✓ 认识</button>
+  </div>
+  <div class="recog-hint" id="recog-hint">回车=认识 · 空格=不认识</div>
+</div>
+  `;
+
+  dictPlayTTS(word.english);
+
+  let revealed = false;
+  let pendingKnown = null;
+
+  function reveal(known) {
+    if (revealed) return;
+    revealed = true;
+    pendingKnown = known;
+    $('recog-chinese').style.visibility = '';
+    $('recog-yes-btn').textContent = '→ 下一个';
+    $('recog-no-btn').textContent = '→ 下一个';
+    $('recog-hint').textContent = '回车 / 空格 继续';
+  }
+
+  function advance() {
+    if (!revealed) return;
+    window.removeEventListener('keydown', onKey);
+    if (pendingKnown) s.knownWords.push(word);
+    else s.unknownWords.push(word);
+    s.currentIdx++;
+    recogShowQuestion();
+  }
+
+  $('recog-yes-btn').addEventListener('click', () => { if (!revealed) reveal(true); else advance(); });
+  $('recog-no-btn').addEventListener('click',  () => { if (!revealed) reveal(false); else advance(); });
+
+  function onKey(e) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (!revealed) reveal(true); else advance();
+    } else if (e.key === ' ') {
+      e.preventDefault();
+      if (!revealed) reveal(false); else advance();
+    }
+  }
+  window.addEventListener('keydown', onKey);
+}
+
+// ---- Recognition Summary Screen ----
+function recogShowSummary() {
+  const s = recogState;
+  const total = s.knownWords.length + s.unknownWords.length;
+
+  let knownHTML = '';
+  if (s.knownWords.length > 0) {
+    knownHTML = `<h4 style="color:#86efac;margin:8px 0 4px;">✓ 认识 (${s.knownWords.length})</h4>`;
+    for (const w of s.knownWords) {
+      knownHTML += `<div class="dict-word-item"><span class="dict-word-en">${escapeHTML(w.english)}</span><span class="dict-word-zh">${escapeHTML(w.chinese)}</span></div>`;
+    }
+  }
+
+  let unknownHTML = '';
+  if (s.unknownWords.length > 0) {
+    unknownHTML = `<h4 style="color:#fca5a5;margin:8px 0 4px;">✗ 不认识 (${s.unknownWords.length})</h4>`;
+    for (const w of s.unknownWords) {
+      unknownHTML += `<div class="dict-word-item"><span class="dict-word-en">${escapeHTML(w.english)}</span><span class="dict-word-zh">${escapeHTML(w.chinese)}</span></div>`;
+    }
+  }
+
+  let csvBtns = '<div class="dict-csv-row">';
+  if (s.knownWords.length > 0) {
+    csvBtns += `<button class="dict-csv-btn" id="recog-dl-known">⬇ 认识的 CSV</button>`;
+  }
+  if (s.unknownWords.length > 0) {
+    csvBtns += `<button class="dict-csv-btn" id="recog-dl-unknown">⬇ 不认识的 CSV</button>`;
+  }
+  csvBtns += '</div>';
+
+  recogBody.innerHTML = `
+<div class="recog-summary">
+  <h3 class="recog-summary-title">认词总结 · ${escapeHTML(s.dayName)}</h3>
+  <div class="dict-stats">
+    <div><span class="dict-stat-num">${total}</span> TOTAL</div>
+    <div><span class="dict-stat-num good">${s.knownWords.length}</span> 认识</div>
+    <div><span class="dict-stat-num bad">${s.unknownWords.length}</span> 不认识</div>
+  </div>
+  <div class="dict-word-list">
+    ${unknownHTML}
+    ${knownHTML}
+  </div>
+  ${csvBtns}
+  <div style="text-align:center;margin-top:12px">
+    <button class="dict-start-btn" id="recog-retry">再来一次</button>
+  </div>
+</div>
+  `;
+
+  const dlKnown = $('recog-dl-known');
+  const dlUnknown = $('recog-dl-unknown');
+  if (dlKnown) dlKnown.addEventListener('click', () => dictDownloadCSV(s.knownWords, `${s.dayName}_known.csv`));
+  if (dlUnknown) dlUnknown.addEventListener('click', () => dictDownloadCSV(s.unknownWords, `${s.dayName}_unknown.csv`));
+
+  $('recog-retry').addEventListener('click', recogReset);
+  $('recog-title').textContent = '认词模式';
+}
+
+function recogReset() {
+  recogState = { words: [], shuffled: [], currentIdx: 0, knownWords: [], unknownWords: [], dayName: '' };
+  $('recog-title').textContent = '认词模式';
+  recogShowSetup();
+}
 
 // Drag support for dictation panel (same pattern as popup)
 let dictDrag = null;
@@ -1118,13 +1447,17 @@ function dictShowQuestion() {
   let awaitingNextEnter = false;
 
   // Per-word trace (recorded into dictState.attempts when the word is settled)
+  const wordStartTime = Date.now();
+  let lastAttemptTime = wordStartTime;
   const currentTrace = {
     english: word.english,
     chinese: word.chinese,
     attempts: [],
+    attemptMs: [],
     skipped: false,
     firstTryOK: false,
     errorCount: 0,
+    totalMs: 0,
   };
   let peeked = false;
 
@@ -1183,6 +1516,7 @@ function dictShowQuestion() {
         }
         currentTrace.skipped = true;
         currentTrace.firstTryOK = false;
+        currentTrace.totalMs = Date.now() - wordStartTime;
         s.attempts.push(currentTrace);
         dictPlayTTS(word.english);
         awaitingNextEnter = true;
@@ -1197,6 +1531,12 @@ function dictShowQuestion() {
           s.incorrectWords.push(word);
           s.isFirstTry = false;
         }
+        // Count the empty-enter as an explicit peek attempt so data stays consistent
+        const peekNow = Date.now();
+        currentTrace.attempts.push('');
+        currentTrace.attemptMs.push(peekNow - lastAttemptTime);
+        lastAttemptTime = peekNow;
+        currentTrace.errorCount++;
         peeked = true;
         dictPlayTTS(word.english);
       }
@@ -1222,8 +1562,11 @@ function dictShowQuestion() {
         s.correctWords.push(word);
       }
 
+      const correctNow = Date.now();
       currentTrace.attempts.push(ans);
-      currentTrace.firstTryOK = (currentTrace.errorCount === 0 && !peeked);
+      currentTrace.attemptMs.push(correctNow - lastAttemptTime);
+      currentTrace.firstTryOK = (currentTrace.errorCount === 0);
+      currentTrace.totalMs = correctNow - wordStartTime;
       s.attempts.push(currentTrace);
 
       // Play TTS
@@ -1244,7 +1587,10 @@ function dictShowQuestion() {
         s.isFirstTry = false;
       }
       s.errorCount++;
+      const wrongNow = Date.now();
       currentTrace.attempts.push(ans);
+      currentTrace.attemptMs.push(wrongNow - lastAttemptTime);
+      lastAttemptTime = wrongNow;
       currentTrace.errorCount++;
 
       if (s.errorCount >= 2) {
@@ -1763,5 +2109,16 @@ scalePanel(popup, 420, 16);
     }
   });
   ro.observe(dictPanel);
+}
+// Recognition panel: base 460px → 18px font
+{
+  const ro = new ResizeObserver(entries => {
+    for (const entry of entries) {
+      const w = entry.contentRect.width;
+      const scale = Math.max(0.6, Math.min(2.5, w / 460));
+      recogPanel.style.fontSize = (18 * scale) + 'px';
+    }
+  });
+  ro.observe(recogPanel);
 }
 

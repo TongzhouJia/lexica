@@ -1,0 +1,24 @@
+services:
+  lexica:
+    build: .
+    image: lexica:latest
+    container_name: lexica
+    ports:
+      - "8080:8080"
+    environment:
+      LISTEN_ADDR: "0.0.0.0:8080"
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./credentials:/app/credentials  # writable so Gmail token refresh can save updated token
+      - ./data:/app/data
+      # Uncomment to enable /clean (LingoCleaner) — needs host path inside container
+      # - "/Users/jiatongzhou/Public/Drop Box/学外语:/Users/jiatongzhou/Public/Drop Box/学外语"
+    networks:
+      - lexica-net
+    restart: unless-stopped
+
+networks:
+  lexica-net:
+    driver: bridge
+    driver_opts:
+      com.docker.network.driver.mtu: "1400"

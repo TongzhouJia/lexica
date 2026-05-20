@@ -1134,9 +1134,11 @@ type TraceWord struct {
 	English    string   `json:"english"`
 	Chinese    string   `json:"chinese"`
 	Attempts   []string `json:"attempts"`
+	AttemptMs  []int    `json:"attemptMs,omitempty"` // ms per attempt (parallel to Attempts)
 	Skipped    bool     `json:"skipped"`
 	FirstTryOK bool     `json:"firstTryOK"`
 	ErrorCount int      `json:"errorCount"`
+	TotalMs    int      `json:"totalMs,omitempty"` // total ms for this word
 }
 
 type TraceRecord struct {
@@ -1999,7 +2001,8 @@ func emailSendHandler(geminiKey, geminiModel string) http.HandlerFunc {
 		httpReq.Header.Set("Authorization", "Bearer "+newTok.AccessToken)
 		httpReq.Header.Set("Content-Type", "application/json")
 
-		resp, err := http.DefaultClient.Do(httpReq)
+		gmailClient := &http.Client{Timeout: 30 * time.Second}
+		resp, err := gmailClient.Do(httpReq)
 		if err != nil {
 			http.Error(w, "send failed: "+err.Error(), http.StatusBadGateway)
 			return
@@ -2110,7 +2113,10 @@ func main() {
 	http.HandleFunc("/gmail/status", gmailStatusHandler())
 	http.HandleFunc("/email/send", emailSendHandler(geminiKey, geminiModel))
 
-	addr := "127.0.0.1:8080"
+	addr := os.Getenv("LISTEN_ADDR")
+	if addr == "" {
+		addr = "127.0.0.1:8080"
+	}
 	fmt.Printf("Listening on http://%s\n", addr)
 	fmt.Printf("  Lexica reader: http://%s/lexica\n", addr)
 	fmt.Printf("  Dictation:     http://%s/lexica (toggle button)\n", addr)

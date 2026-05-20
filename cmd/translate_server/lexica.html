@@ -60,6 +60,9 @@
         <button class="sidebar-tab" id="tab-dict-skip" title="听写·跳过模式">
           <span class="tab-icon">⚡</span>听写·跳过
         </button>
+        <button class="sidebar-tab" id="tab-recog" title="认词·看英文标认识">
+          <span class="tab-icon">👁️</span>认词
+        </button>
         <button class="sidebar-tab" id="tab-traces" title="练习痕迹">
           <span class="tab-icon">📊</span>练习痕迹
         </button>
@@ -95,7 +98,18 @@
         </div>
       </div>
 
-      <!-- Tab 4: Practice Traces -->
+      <!-- Tab 4: Recognition info -->
+      <div class="sidebar-content hidden" id="sidebar-recog-info">
+        <div style="text-align:center;padding:32px 12px;color:var(--ink-soft);">
+          <div style="font-size:32px;margin-bottom:12px;">👁️</div>
+          <div
+            style="font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:8px;">
+            认词模式</div>
+          <div style="font-size:13px;line-height:1.6;">看到英文，标记认识或不认识。</div>
+        </div>
+      </div>
+
+      <!-- Tab 6: Practice Traces -->
       <div class="sidebar-content hidden" id="sidebar-traces">
         <div class="library-head">
           <h2 class="library-title">练习痕迹</h2>
@@ -199,6 +213,19 @@
     </div>
     <iframe id="popup-frame" sandbox="allow-same-origin allow-scripts allow-popups"></iframe>
     <div id="popup-loading">查询中</div>
+  </div>
+
+  <!-- Recognition Panel -->
+  <div id="recognition-panel">
+    <div id="recog-header">
+      <div id="recog-title">认词模式</div>
+      <div class="popup-actions">
+        <button id="recog-close-btn" class="icon-only" title="关闭">✕</button>
+      </div>
+    </div>
+    <div id="recog-body">
+      <!-- Screens injected by JS -->
+    </div>
   </div>
 
   <!-- Dictation Panel -->

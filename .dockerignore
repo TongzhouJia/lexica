@@ -1,0 +1,23 @@
+.git
+.gitignore
+.idea
+.claude
+.DS_Store
+**/.DS_Store
+**/._*
+
+# secrets — mounted as volume, never bake into image
+.env
+credentials/
+
+# user data — mounted as volume
+data/
+
+# locally built binary
+/translate_server
+*.exe
+
+# docker artifacts
+Dockerfile
+docker-compose.yml
+.dockerignore
