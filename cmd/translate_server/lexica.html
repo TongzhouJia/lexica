@@ -1638,6 +1638,10 @@
       cursor: not-allowed;
     }
 
+    .hidden {
+      display: none !important;
+    }
+
     /* ========== AI PANEL (centered in main area) ========== */
     #ai-panel {
       max-width: 760px;
@@ -1781,6 +1785,8 @@
       opacity: 0.5;
       cursor: not-allowed;
     }
+
+
   </style>
 </head>
 
@@ -1826,6 +1832,12 @@
         <button class="sidebar-tab" id="tab-traces" title="练习痕迹">
           <span class="tab-icon">📊</span>练习痕迹
         </button>
+        <button class="sidebar-tab" id="tab-cleaner" title="清理单词">
+          <span class="tab-icon">🧹</span>清理单词
+        </button>
+        <button class="sidebar-tab" id="tab-activity" title="活动日志">
+          <span class="tab-icon">📝</span>日志
+        </button>
       </div>
 
       <!-- Tab 1: GCS Files -->
@@ -1869,6 +1881,36 @@
           <span id="trace-selected-count" class="trace-selected">已选 0 条</span>
           <button id="trace-open-ai" class="trace-open-ai-btn" disabled>🤖 问 AI</button>
         </div>
+      </div>
+
+      <!-- Tab 5: Cleaner -->
+      <div class="sidebar-content hidden" id="sidebar-cleaner">
+        <div class="library-head">
+          <h2 class="library-title">清理单词</h2>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:12px; margin-top:12px;">
+          <textarea id="cleaner-input" placeholder="输入要清理的单词，用逗号分隔..." 
+            style="width:100%; height:80px; resize:vertical; font-family:'JetBrains Mono',monospace; font-size:13px; padding:10px; border:1px solid var(--rule); border-radius:4px; background:var(--bg-elev); color:var(--ink); outline:none;"></textarea>
+          <div style="display:flex; gap:8px;">
+            <button id="cleaner-btn" class="primary" style="flex:1; font-size:13px; padding:10px;">确认清理(本地)</button>
+            <button id="cleaner-sync-btn" style="flex:0 0 auto; font-size:13px; padding:10px;" title="清理云端">☁️</button>
+          </div>
+          <div id="cleaner-status" style="font-size:12px; color:var(--ink-soft); min-height:18px;"></div>
+        </div>
+      </div>
+
+      <!-- Tab 6: Activity Log -->
+      <div class="sidebar-content hidden" id="sidebar-activity">
+        <div class="library-head">
+          <h2 class="library-title">活动日志</h2>
+          <button id="activity-refresh" class="library-refresh" title="刷新">刷新</button>
+        </div>
+        <div style="display:flex; gap:6px; margin-bottom:8px;">
+          <input type="email" id="email-to" placeholder="收件邮箱" style="flex:1; font-family:'JetBrains Mono',monospace; font-size:11px; padding:6px 8px; border:1px solid var(--rule); border-radius:3px; background:var(--bg-elev); color:var(--ink); outline:none;">
+          <button id="email-send-btn" style="font-size:11px; padding:6px 10px;" title="发送今日学习日报">📧 发日报</button>
+        </div>
+        <div id="email-status" style="font-size:11px; color:var(--ink-soft); min-height:16px; margin-bottom:6px;"></div>
+        <div id="activity-list" class="library-list" style="font-size:12px;"></div>
       </div>
     </aside>
 
@@ -2538,6 +2580,9 @@
       // selected more than one token or a fragment that should not trigger lookup.
       if (/[,，;；:：.!?！？。、《》\/\\|()[\]{}<>]/.test(word)) return '';
 
+      // Ignore selection if it contains Chinese characters
+      if (/[\u4e00-\u9fa5]/.test(word)) return '';
+
       return word;
     }
 
@@ -2654,9 +2699,13 @@
     const tabDictStrict = $('tab-dict-strict');
     const tabDictSkip = $('tab-dict-skip');
     const tabTraces = $('tab-traces');
+    const tabCleaner = $('tab-cleaner');
+    const tabActivity = $('tab-activity');
     const sidebarFiles = $('sidebar-files');
     const sidebarDictInfo = $('sidebar-dict-info');
     const sidebarTraces = $('sidebar-traces');
+    const sidebarCleaner = $('sidebar-cleaner');
+    const sidebarActivity = $('sidebar-activity');
     const sidebarDictLabel = $('sidebar-dict-mode-label');
     const sidebarDictDesc = $('sidebar-dict-mode-desc');
 
@@ -2676,7 +2725,7 @@
     };
 
     function setActiveTab(tab) {
-      [tabFiles, tabDictStrict, tabDictSkip, tabTraces].forEach(t => t.classList.remove('active'));
+      [tabFiles, tabDictStrict, tabDictSkip, tabTraces, tabCleaner, tabActivity].forEach(t => t.classList.remove('active'));
       if (tab) tab.classList.add('active');
     }
 
@@ -2684,6 +2733,8 @@
       sidebarFiles.classList.toggle('hidden', which !== 'files');
       sidebarDictInfo.classList.toggle('hidden', which !== 'dict');
       sidebarTraces.classList.toggle('hidden', which !== 'traces');
+      sidebarCleaner.classList.toggle('hidden', which !== 'cleaner');
+      sidebarActivity.classList.toggle('hidden', which !== 'activity');
     }
 
     function openDictation(mode) {
@@ -2721,6 +2772,126 @@
       showSidebarContent('traces');
       dictPanel.classList.remove('visible');
       refreshTraces();
+    });
+
+    tabCleaner.addEventListener('click', () => {
+      setActiveTab(tabCleaner);
+      showSidebarContent('cleaner');
+      dictPanel.classList.remove('visible');
+    });
+
+    tabActivity.addEventListener('click', () => {
+      setActiveTab(tabActivity);
+      showSidebarContent('activity');
+      dictPanel.classList.remove('visible');
+      refreshActivityLogs();
+    });
+
+    // Activity log
+    async function refreshActivityLogs() {
+      const listEl = $('activity-list');
+      listEl.innerHTML = '<div style="color:var(--ink-soft);padding:8px;">加载中...</div>';
+      try {
+        const res = await fetch(`${apiBase()}/activity/list`);
+        const logs = await res.json();
+        if (!logs || !logs.length) {
+          listEl.innerHTML = '<div style="color:var(--ink-soft);padding:8px;">暂无记录</div>';
+          return;
+        }
+        listEl.innerHTML = '';
+        const typeIcons = {dictation:'📝', clean:'🧹', clean_sync:'☁️', email:'📧'};
+        for (const log of logs) {
+          const div = document.createElement('div');
+          div.style.cssText = 'padding:6px 8px; border-bottom:1px solid var(--rule); line-height:1.5;';
+          const icon = typeIcons[log.type] || '📋';
+          const t = new Date(log.time);
+          const timeStr = `${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}`;
+          const dateStr = log.time.slice(0,10);
+          div.innerHTML = `<span style="color:var(--gcp);font-family:'JetBrains Mono',monospace;font-size:10px;">${dateStr} ${timeStr}</span> ${icon} <span style="color:var(--ink);">${log.summary}</span>`;
+          listEl.appendChild(div);
+        }
+      } catch(e) {
+        listEl.innerHTML = '<div style="color:var(--accent);padding:8px;">加载失败</div>';
+      }
+    }
+
+    $('activity-refresh').addEventListener('click', refreshActivityLogs);
+
+    // Email send
+    $('email-send-btn').addEventListener('click', async () => {
+      const to = $('email-to').value.trim();
+      if (!to) { $('email-status').textContent = '请输入邮箱地址'; return; }
+      const btn = $('email-send-btn');
+      btn.disabled = true;
+      $('email-status').textContent = '发送中...';
+      try {
+        const res = await fetch(`${apiBase()}/email/send`, {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({to})
+        });
+        if (res.status === 401) {
+          $('email-status').innerHTML = '未授权，<a href="/gmail/auth" target="_blank" style="color:var(--accent);">点此授权Gmail</a>';
+          return;
+        }
+        if (!res.ok) { const t = await res.text(); throw new Error(t); }
+        $('email-status').textContent = '✅ 日报已发送到 ' + to;
+        localStorage.setItem('lexica.emailTo', to);
+      } catch(e) {
+        $('email-status').textContent = '❌ ' + e.message;
+      } finally { btn.disabled = false; }
+    });
+
+    // Restore saved email
+    const savedEmail = localStorage.getItem('lexica.emailTo');
+    if (savedEmail) $('email-to').value = savedEmail;
+
+
+    $('cleaner-btn').addEventListener('click', async () => {
+      const input = $('cleaner-input').value.trim();
+      if (!input) return;
+      
+      $('cleaner-btn').disabled = true;
+      $('cleaner-btn').textContent = '清理中...';
+      $('cleaner-status').textContent = '';
+      
+      try {
+        const res = await fetch('/clean', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ words: input })
+        });
+        if (!res.ok) throw new Error('API Error');
+        const data = await res.json();
+        $('cleaner-status').textContent = `成功本地清理 ${data.cleaned} 个单词，${data.pending_sync} 个文件待同步。`;
+        $('cleaner-input').value = '';
+      } catch (err) {
+        $('cleaner-status').textContent = '清理失败，请重试。';
+        console.error(err);
+      } finally {
+        $('cleaner-btn').disabled = false;
+        $('cleaner-btn').textContent = '确认清理(本地)';
+      }
+    });
+
+    $('cleaner-sync-btn').addEventListener('click', async () => {
+      const btn = $('cleaner-sync-btn');
+      btn.disabled = true;
+      $('cleaner-status').textContent = '同步云端中...';
+      
+      try {
+        const res = await fetch('/clean/sync', {
+          method: 'POST'
+        });
+        if (!res.ok) throw new Error('API Error');
+        const data = await res.json();
+        $('cleaner-status').textContent = `云端同步完成，更新了 ${data.synced} 个文件。`;
+      } catch (err) {
+        $('cleaner-status').textContent = '云端同步失败，请重试。';
+        console.error(err);
+      } finally {
+        btn.disabled = false;
+      }
     });
 
     dictCloseBtn.addEventListener('click', () => {
@@ -3430,6 +3601,8 @@
         renderTraceList();
       });
     });
+
+
 
     // ========================================================
     //  AI Panel (centered chat — single-shot, no context)

@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/storage"
+	"golang.org/x/oauth2"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 )
@@ -1189,6 +1190,7 @@ func traceRecordHandler() http.HandlerFunc {
 			return
 		}
 		log.Printf("[trace saved] %s (%s, %d words)", rec.ID, rec.DayName, len(rec.Words))
+		appendActivityLog("dictation", fmt.Sprintf("听写 %s: %d词, 正确%d, 错误%d", rec.DayName, rec.Total, rec.FirstTryCorrect, rec.Wrong), nil)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"id": rec.ID})
 	}
@@ -1397,8 +1399,624 @@ func traceAskHandler(apiKey, model string) http.HandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
+// LingoCleaner Handler
+// ---------------------------------------------------------------------------
+
+const lingoBaseDir = "/Users/jiatongzhou/Public/Drop Box/学外语"
+const lingoGcsDailyWordPrefix = "study-english/vocabulary-list/daily_english_word/"
+
+func removeFromTxt(filePath string, targetWord string) bool {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return false
+	}
+	lines := strings.Split(string(data), "\n")
+	var newLines []string
+	found := false
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if !found && len(fields) > 0 && strings.ToLower(fields[0]) == targetWord {
+			found = true
+			continue
+		}
+		newLines = append(newLines, line)
+	}
+	if found {
+		os.WriteFile(filePath, []byte(strings.Join(newLines, "\n")), 0644)
+	}
+	return found
+}
+
+func renameAudio(filePath string) {
+	if _, err := os.Stat(filePath); err == nil {
+		os.Rename(filePath, filePath+".bak")
+	}
+}
+
+func cleanHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "only POST is allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			Words string `json:"words"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+
+		changedFiles := make(map[string]string)
+		words := strings.Split(req.Words, ",")
+
+		for _, w := range words {
+			word := strings.ToLower(strings.TrimSpace(w))
+			if word == "" {
+				continue
+			}
+			firstLetter := string(word[0])
+
+			// 1. alphabet_order_word
+			removeFromTxt(filepath.Join(lingoBaseDir, "alphabet_order_word", firstLetter+".txt"), word)
+			
+			// 2. alphabet_order_audio
+			renameAudio(filepath.Join(lingoBaseDir, "alphabet_order_audio", firstLetter, word+".mp3"))
+
+			// 3. daily_english_word
+			dailyWordDir := filepath.Join(lingoBaseDir, "daily_english_word")
+			if entries, err := os.ReadDir(dailyWordDir); err == nil {
+				for _, entry := range entries {
+					if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".txt") {
+						fp := filepath.Join(dailyWordDir, entry.Name())
+						if removeFromTxt(fp, word) {
+							changedFiles[entry.Name()] = fp
+							break
+						}
+					}
+				}
+			}
+
+			// 4. daily_english_audio
+			dailyAudioDir := filepath.Join(lingoBaseDir, "daily_english_audio")
+			if entries, err := os.ReadDir(dailyAudioDir); err == nil {
+				for _, entry := range entries {
+					if entry.IsDir() && strings.HasPrefix(entry.Name(), "day") {
+						ap := filepath.Join(dailyAudioDir, entry.Name(), word+".mp3")
+						if _, err := os.Stat(ap); err == nil {
+							renameAudio(ap)
+							break
+						}
+					}
+				}
+			}
+		}
+
+		loc := time.FixedZone("UTC+8", 8*60*60)
+		nowStr := time.Now().In(loc).Format(time.RFC3339)
+
+		if len(changedFiles) > 0 {
+			pendingFile := filepath.Join(projectRoot, "data", "clean_sync_pending.json")
+			var records []CleanSyncRecord
+			if data, err := os.ReadFile(pendingFile); err == nil {
+				json.Unmarshal(data, &records)
+			}
+			for k, v := range changedFiles {
+				records = append(records, CleanSyncRecord{
+					FileName:  k,
+					LocalPath: v,
+					Words:     req.Words,
+					CleanedAt: nowStr,
+				})
+			}
+			if data, err := json.MarshalIndent(records, "", "  "); err == nil {
+				os.WriteFile(pendingFile, data, 0644)
+			}
+		}
+
+		// Log the cleaning activity
+		var cleanedWords []string
+		for _, w := range words {
+			w = strings.TrimSpace(w)
+			if w != "" {
+				cleanedWords = append(cleanedWords, w)
+			}
+		}
+		if len(cleanedWords) > 0 {
+			appendActivityLog("clean", fmt.Sprintf("清理单词: %s", strings.Join(cleanedWords, ", ")), nil)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"status": "success",
+			"cleaned": len(cleanedWords),
+			"pending_sync": len(changedFiles),
+		})
+	}
+}
+
+func cleanSyncHandler(gcsBucket, credPath string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "only POST is allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		pendingFile := filepath.Join(projectRoot, "data", "clean_sync_pending.json")
+		var records []CleanSyncRecord
+		if data, err := os.ReadFile(pendingFile); err == nil {
+			json.Unmarshal(data, &records)
+		}
+
+		// Find unsynced records
+		unsyncedCount := 0
+		for _, r := range records {
+			if r.SyncedAt == "" {
+				unsyncedCount++
+			}
+		}
+		if unsyncedCount == 0 {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{"status": "success", "synced": 0})
+			return
+		}
+
+		ctx := context.Background()
+		var client *storage.Client
+		if credPath != "" {
+			client, _ = storage.NewClient(ctx, option.WithCredentialsFile(credPath))
+		} else if os.Getenv("GOOGLE_APPLICATION_CREDENTIALS") != "" {
+			client, _ = storage.NewClient(ctx)
+		}
+
+		loc := time.FixedZone("UTC+8", 8*60*60)
+		synced := 0
+		if client != nil {
+			for i := range records {
+				if records[i].SyncedAt != "" {
+					continue
+				}
+				if data, err := os.ReadFile(records[i].LocalPath); err == nil {
+					gcsPath := lingoGcsDailyWordPrefix + records[i].FileName
+					writer := client.Bucket(gcsBucket).Object(gcsPath).NewWriter(ctx)
+					writer.ContentType = "text/plain; charset=utf-8"
+					if _, err := writer.Write(data); err == nil {
+						writer.Close()
+						records[i].SyncedAt = time.Now().In(loc).Format(time.RFC3339)
+						synced++
+					} else {
+						writer.Close()
+					}
+				}
+			}
+			client.Close()
+		}
+
+		// Save back with synced_at markers (logical delete)
+		if data, err := json.MarshalIndent(records, "", "  "); err == nil {
+			os.WriteFile(pendingFile, data, 0644)
+		}
+
+		if synced > 0 {
+			appendActivityLog("clean_sync", fmt.Sprintf("已同步 %d 个文件到云端", synced), nil)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"status": "success", "synced": synced})
+	}
+}
+
+// CleanSyncRecord represents a file pending/completed cloud sync (logical delete pattern)
+type CleanSyncRecord struct {
+	FileName  string `json:"file_name"`
+	LocalPath string `json:"local_path"`
+	Words     string `json:"words,omitempty"`
+	CleanedAt string `json:"cleaned_at"`
+	SyncedAt  string `json:"synced_at,omitempty"` // empty = not synced yet
+}
+
+// ---------------------------------------------------------------------------
+// Activity Log System
+// ---------------------------------------------------------------------------
+
+type ActivityLogEntry struct {
+	Time    string `json:"time"`
+	Type    string `json:"type"` // dictation, clean, clean_sync, email, etc.
+	Summary string `json:"summary"`
+	Detail  any    `json:"detail,omitempty"`
+}
+
+func activityLogDir() string {
+	return filepath.Join(projectRoot, "data", "translate_server", "activity_logs")
+}
+
+func appendActivityLog(logType, summary string, detail any) {
+	loc := time.FixedZone("UTC+8", 8*60*60)
+	now := time.Now().In(loc)
+	entry := ActivityLogEntry{
+		Time:    now.Format(time.RFC3339),
+		Type:    logType,
+		Summary: summary,
+		Detail:  detail,
+	}
+
+	dir := activityLogDir()
+	os.MkdirAll(dir, 0755)
+
+	// One file per day: 2026-05-20.json
+	dayFile := filepath.Join(dir, now.Format("2006-01-02")+".json")
+	var entries []ActivityLogEntry
+	if data, err := os.ReadFile(dayFile); err == nil {
+		json.Unmarshal(data, &entries)
+	}
+	entries = append(entries, entry)
+	if data, err := json.MarshalIndent(entries, "", "  "); err == nil {
+		os.WriteFile(dayFile, data, 0644)
+	}
+	log.Printf("[activity] [%s] %s", logType, summary)
+}
+
+// purgeOldActivityLogs removes log files older than 10 days
+func purgeOldActivityLogs() {
+	dir := activityLogDir()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().AddDate(0, 0, -10)
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		dayStr := strings.TrimSuffix(e.Name(), ".json")
+		t, err := time.Parse("2006-01-02", dayStr)
+		if err != nil {
+			continue
+		}
+		if t.Before(cutoff) {
+			os.Remove(filepath.Join(dir, e.Name()))
+			log.Printf("[activity] purged old log: %s", e.Name())
+		}
+	}
+}
+
+func activityLogListHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeCORSHeaders(w)
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		dir := activityLogDir()
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode([]ActivityLogEntry{})
+			return
+		}
+
+		var allLogs []ActivityLogEntry
+		// Read most recent 10 days worth of logs
+		cutoff := time.Now().AddDate(0, 0, -10)
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+				continue
+			}
+			dayStr := strings.TrimSuffix(e.Name(), ".json")
+			t, err := time.Parse("2006-01-02", dayStr)
+			if err != nil || t.Before(cutoff) {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+			if err != nil {
+				continue
+			}
+			var dayEntries []ActivityLogEntry
+			if err := json.Unmarshal(data, &dayEntries); err == nil {
+				allLogs = append(allLogs, dayEntries...)
+			}
+		}
+
+		// Sort newest first
+		sort.Slice(allLogs, func(i, j int) bool {
+			return allLogs[i].Time > allLogs[j].Time
+		})
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(allLogs)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Gmail Daily Report Email (OAuth2)
+// ---------------------------------------------------------------------------
+
+func gmailTokenPath() string {
+	return filepath.Join(projectRoot, "credentials", "gmail_token.json")
+}
+
+func gmailClientSecretPath() string {
+	return filepath.Join(projectRoot, "credentials", "gmail_client_secret.json")
+}
+
+func loadGmailOAuth2Config() (*oauth2.Config, error) {
+	data, err := os.ReadFile(gmailClientSecretPath())
+	if err != nil {
+		return nil, fmt.Errorf("read client secret: %w", err)
+	}
+	var creds struct {
+		Installed struct {
+			ClientID     string   `json:"client_id"`
+			ClientSecret string   `json:"client_secret"`
+			AuthURI      string   `json:"auth_uri"`
+			TokenURI     string   `json:"token_uri"`
+			RedirectURIs []string `json:"redirect_uris"`
+		} `json:"installed"`
+	}
+	if err := json.Unmarshal(data, &creds); err != nil {
+		return nil, fmt.Errorf("parse client secret: %w", err)
+	}
+	redirectURI := "http://localhost:8080/gmail/callback"
+	return &oauth2.Config{
+		ClientID:     creds.Installed.ClientID,
+		ClientSecret: creds.Installed.ClientSecret,
+		Endpoint: oauth2.Endpoint{
+			AuthURL:  creds.Installed.AuthURI,
+			TokenURL: creds.Installed.TokenURI,
+		},
+		RedirectURL: redirectURI,
+		Scopes:      []string{"https://www.googleapis.com/auth/gmail.send"},
+	}, nil
+}
+
+func loadSavedToken() (*oauth2.Token, error) {
+	data, err := os.ReadFile(gmailTokenPath())
+	if err != nil {
+		return nil, err
+	}
+	var tok oauth2.Token
+	if err := json.Unmarshal(data, &tok); err != nil {
+		return nil, err
+	}
+	return &tok, nil
+}
+
+func saveToken(tok *oauth2.Token) error {
+	data, err := json.MarshalIndent(tok, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(gmailTokenPath(), data, 0600)
+}
+
+// GET /gmail/auth → redirect to Google OAuth2 consent
+func gmailAuthHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		cfg, err := loadGmailOAuth2Config()
+		if err != nil {
+			http.Error(w, "OAuth config error: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		authURL := cfg.AuthCodeURL("state-token", oauth2.AccessTypeOffline, oauth2.SetAuthURLParam("prompt", "consent"))
+		http.Redirect(w, r, authURL, http.StatusTemporaryRedirect)
+	}
+}
+
+// GET /gmail/callback?code=xxx → exchange code for token
+func gmailCallbackHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		code := r.URL.Query().Get("code")
+		if code == "" {
+			http.Error(w, "missing code", http.StatusBadRequest)
+			return
+		}
+		cfg, err := loadGmailOAuth2Config()
+		if err != nil {
+			http.Error(w, "OAuth config error: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		tok, err := cfg.Exchange(context.Background(), code)
+		if err != nil {
+			http.Error(w, "token exchange failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := saveToken(tok); err != nil {
+			http.Error(w, "save token failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		log.Println("[gmail] OAuth2 token saved successfully")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, `<html><body style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;background:#FAF6EC;">
+		<div style="text-align:center"><h1>✅ Gmail 授权成功</h1><p>可以关闭此窗口了。</p></div></body></html>`)
+	}
+}
+
+// GET /gmail/status → check if Gmail token exists and is valid
+func gmailStatusHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeCORSHeaders(w)
+		tok, err := loadSavedToken()
+		authorized := err == nil && tok != nil
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"authorized": authorized})
+	}
+}
+
+func buildDailyReport(geminiKey, geminiModel string) (string, error) {
+	loc := time.FixedZone("UTC+8", 8*60*60)
+	today := time.Now().In(loc).Format("2006-01-02")
+
+	// Collect today's activity logs
+	logFile := filepath.Join(activityLogDir(), today+".json")
+	var logs []ActivityLogEntry
+	if data, err := os.ReadFile(logFile); err == nil {
+		json.Unmarshal(data, &logs)
+	}
+
+	// Collect today's traces
+	var todayTraces []TraceRecord
+	trDir := tracesDir()
+	if entries, err := os.ReadDir(trDir); err == nil {
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(trDir, e.Name()))
+			if err != nil {
+				continue
+			}
+			var rec TraceRecord
+			if json.Unmarshal(data, &rec) == nil && strings.HasPrefix(rec.Timestamp, today) {
+				todayTraces = append(todayTraces, rec)
+			}
+		}
+	}
+
+	// Collect cleaned words
+	pendingFile := filepath.Join(projectRoot, "data", "clean_sync_pending.json")
+	var cleanRecords []CleanSyncRecord
+	if data, err := os.ReadFile(pendingFile); err == nil {
+		json.Unmarshal(data, &cleanRecords)
+	}
+	var todayCleaned []CleanSyncRecord
+	for _, r := range cleanRecords {
+		if strings.HasPrefix(r.CleanedAt, today) {
+			todayCleaned = append(todayCleaned, r)
+		}
+	}
+
+	// Build report content
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("📅 %s 学习日报\n\n", today))
+
+	if len(todayTraces) > 0 {
+		totalWords := 0
+		correct := 0
+		wrong := 0
+		for _, t := range todayTraces {
+			totalWords += t.Total
+			correct += t.FirstTryCorrect
+			wrong += t.Wrong
+		}
+		sb.WriteString(fmt.Sprintf("📝 听写练习: %d 次\n", len(todayTraces)))
+		sb.WriteString(fmt.Sprintf("   总计 %d 个单词, 一遍过 %d, 错误 %d\n\n", totalWords, correct, wrong))
+	} else {
+		sb.WriteString("📝 听写练习: 今日无记录\n\n")
+	}
+
+	if len(todayCleaned) > 0 {
+		var words []string
+		for _, c := range todayCleaned {
+			words = append(words, c.Words)
+		}
+		sb.WriteString(fmt.Sprintf("🧹 学会并清理: %s\n\n", strings.Join(words, ", ")))
+	}
+
+	if len(logs) > 0 {
+		sb.WriteString(fmt.Sprintf("📋 操作记录: %d 条\n", len(logs)))
+		for _, l := range logs {
+			sb.WriteString(fmt.Sprintf("   [%s] %s\n", l.Type, l.Summary))
+		}
+	}
+
+	// If Gemini is available, generate a summary
+	if geminiKey != "" && (len(todayTraces) > 0 || len(todayCleaned) > 0) {
+		prompt := fmt.Sprintf("你是一名英语学习助手。以下是用户今天的学习数据，请用中文写一段简短鼓励性的总结和明日建议(100字以内):\n\n%s", sb.String())
+		if summary, err := callGemini(geminiKey, geminiModel, prompt); err == nil {
+			sb.WriteString("\n\n🤖 AI 点评:\n" + summary)
+		}
+	}
+
+	return sb.String(), nil
+}
+
+// POST /email/send → send today's daily report via Gmail
+func emailSendHandler(geminiKey, geminiModel string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			To string `json:"to"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.To == "" {
+			http.Error(w, "need {\"to\":\"email@example.com\"}", http.StatusBadRequest)
+			return
+		}
+
+		cfg, err := loadGmailOAuth2Config()
+		if err != nil {
+			http.Error(w, "OAuth config: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		tok, err := loadSavedToken()
+		if err != nil {
+			http.Error(w, "未授权 Gmail，请先访问 /gmail/auth", http.StatusUnauthorized)
+			return
+		}
+
+		// Refresh token if needed
+		tokenSource := cfg.TokenSource(context.Background(), tok)
+		newTok, err := tokenSource.Token()
+		if err != nil {
+			http.Error(w, "token refresh failed: "+err.Error(), http.StatusUnauthorized)
+			return
+		}
+		if newTok.AccessToken != tok.AccessToken {
+			saveToken(newTok)
+		}
+
+		report, err := buildDailyReport(geminiKey, geminiModel)
+		if err != nil {
+			http.Error(w, "build report: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		loc := time.FixedZone("UTC+8", 8*60*60)
+		today := time.Now().In(loc).Format("2006-01-02")
+		subject := fmt.Sprintf("📚 英语学习日报 — %s", today)
+
+		// Build RFC 2822 email
+		msgStr := fmt.Sprintf("To: %s\r\nSubject: =?utf-8?B?%s?=\r\nContent-Type: text/plain; charset=\"UTF-8\"\r\n\r\n%s",
+			req.To,
+			base64.StdEncoding.EncodeToString([]byte(subject)),
+			report,
+		)
+		raw := base64.URLEncoding.EncodeToString([]byte(msgStr))
+
+		// Send via Gmail API
+		sendURL := "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
+		body, _ := json.Marshal(map[string]string{"raw": raw})
+		httpReq, _ := http.NewRequest("POST", sendURL, bytes.NewReader(body))
+		httpReq.Header.Set("Authorization", "Bearer "+newTok.AccessToken)
+		httpReq.Header.Set("Content-Type", "application/json")
+
+		resp, err := http.DefaultClient.Do(httpReq)
+		if err != nil {
+			http.Error(w, "send failed: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+		respBody, _ := io.ReadAll(resp.Body)
+
+		if resp.StatusCode != 200 {
+			http.Error(w, "Gmail API error: "+string(respBody), resp.StatusCode)
+			return
+		}
+
+		appendActivityLog("email", fmt.Sprintf("已发送日报到 %s", req.To), nil)
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "sent", "to": req.To})
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
+
 
 func main() {
 	// Resolve project root (works from cmd/translate_server/ or project root)
@@ -1460,6 +2078,7 @@ func main() {
 	// Load disk caches
 	loadTranslateCache()
 	loadTTSCache()
+	purgeOldActivityLogs()
 	log.Printf("[init] project root: %s", projectRoot)
 
 	http.HandleFunc("/", translateHandler(translateKey, ttsKey))
@@ -1475,6 +2094,13 @@ func main() {
 	http.HandleFunc("/trace/list", traceListHandler())
 	http.HandleFunc("/trace/delete", traceDeleteHandler())
 	http.HandleFunc("/trace/ask", traceAskHandler(geminiKey, geminiModel))
+	http.HandleFunc("/clean", cleanHandler())
+	http.HandleFunc("/clean/sync", cleanSyncHandler(gcsBucket, credPath))
+	http.HandleFunc("/activity/list", activityLogListHandler())
+	http.HandleFunc("/gmail/auth", gmailAuthHandler())
+	http.HandleFunc("/gmail/callback", gmailCallbackHandler())
+	http.HandleFunc("/gmail/status", gmailStatusHandler())
+	http.HandleFunc("/email/send", emailSendHandler(geminiKey, geminiModel))
 
 	addr := "127.0.0.1:8080"
 	fmt.Printf("Listening on http://%s\n", addr)
