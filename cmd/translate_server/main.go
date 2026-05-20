@@ -2034,7 +2034,7 @@ func main() {
 	} else {
 		// fallback: absolute path
 		home, _ := os.UserHomeDir()
-		projectRoot = filepath.Join(home, "GolandProjects", "my-toolbox")
+		projectRoot = filepath.Join(home, "GolandProjects", "lexica")
 	}
 
 	// Load .env
