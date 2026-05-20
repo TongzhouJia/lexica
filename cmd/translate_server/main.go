@@ -940,15 +940,21 @@ func gcsDownloadHandler(bucketName, prefix, credPath string) http.HandlerFunc {
 
 // lexicaHandler – GET /lexica → serves lexica.html from cmd/translate_server/
 func lexicaHandler() http.HandlerFunc {
+	return lexicaAssetHandler("lexica.html", "text/html; charset=utf-8")
+}
+
+// lexicaAssetHandler – generic static-file handler for lexica's bundle
+// (html/css/js). Reads from cmd/translate_server/<filename>.
+func lexicaAssetHandler(filename, contentType string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		htmlPath := filepath.Join(projectRoot, "cmd", "translate_server", "lexica.html")
-		data, err := os.ReadFile(htmlPath)
+		path := filepath.Join(projectRoot, "cmd", "translate_server", filename)
+		data, err := os.ReadFile(path)
 		if err != nil {
-			log.Printf("[lexica] read error: %v", err)
-			http.Error(w, "lexica.html not found", http.StatusNotFound)
+			log.Printf("[lexica] read %s error: %v", filename, err)
+			http.Error(w, filename+" not found", http.StatusNotFound)
 			return
 		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Content-Type", contentType)
 		w.Write(data)
 	}
 }
@@ -2085,6 +2091,8 @@ func main() {
 	http.HandleFunc("/play", playHandler(ttsKey))
 	http.HandleFunc("/save", saveHandler())
 	http.HandleFunc("/lexica", lexicaHandler())
+	http.HandleFunc("/lexica.css", lexicaAssetHandler("lexica.css", "text/css; charset=utf-8"))
+	http.HandleFunc("/lexica.js", lexicaAssetHandler("lexica.js", "application/javascript; charset=utf-8"))
 	http.HandleFunc("/gcs/list", gcsListHandler(gcsBucket, gcsPrefix, credPath))
 	http.HandleFunc("/gcs/download", gcsDownloadHandler(gcsBucket, gcsPrefix, credPath))
 	http.HandleFunc("/dictation/days", dictationDaysHandler(gcsBucket, credPath))
