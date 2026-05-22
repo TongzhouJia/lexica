@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"cloud.google.com/go/firestore"
 	"cloud.google.com/go/storage"
 	"golang.org/x/oauth2"
 	"google.golang.org/api/iterator"
@@ -78,6 +79,11 @@ var (
 	cache        sync.Map // translate cache: "sl:tl:text" → translated string
 	ttsCache     sync.Map // TTS cache: text → MP3 file path on disk
 	vocabularyMu sync.Mutex
+
+	// Firestore + GCS global clients for TTS cloud sync
+	firestoreClient *firestore.Client
+	gcsClientGlobal *storage.Client
+	gcsBucketName   string // populated in main()
 )
 
 // ---------------------------------------------------------------------------
@@ -215,7 +221,115 @@ func saveTTSAudio(text string, audioBytes []byte) string {
 		os.WriteFile(indexPath, data, 0644)
 	}
 
+	// Async sync to Firestore + GCS (non-blocking)
+	go syncToCloud(text, filename, audioBytes)
+
 	return mp3Path
+}
+
+// ---------------------------------------------------------------------------
+// Cloud sync: upload MP3 to GCS + write Firestore document
+// ---------------------------------------------------------------------------
+
+func syncToCloud(text, filename string, audioBytes []byte) {
+	if gcsClientGlobal == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// 1. Upload mp3 to GCS
+	gcsPath := "tts/" + filename
+	w := gcsClientGlobal.Bucket(gcsBucketName).Object(gcsPath).NewWriter(ctx)
+	w.ContentType = "audio/mpeg"
+	w.CacheControl = "public, max-age=31536000"
+	if _, err := w.Write(audioBytes); err != nil {
+		log.Printf("[cloud sync] GCS write error: %v", err)
+		w.Close()
+		return
+	}
+	if err := w.Close(); err != nil {
+		log.Printf("[cloud sync] GCS close error: %v", err)
+		return
+	}
+
+	// 2. Write Firestore document
+	if firestoreClient != nil {
+		docID := textHash(text)
+		_, err := firestoreClient.Collection("tts_cache").Doc(docID).Set(ctx, map[string]interface{}{
+			"text":      text,
+			"filename":  filename,
+			"gcsPath":   gcsPath,
+			"createdAt": firestore.ServerTimestamp,
+		})
+		if err != nil {
+			log.Printf("[cloud sync] Firestore write error: %v", err)
+		} else {
+			log.Printf("[cloud sync] synced: %s → %s", text, gcsPath)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// One-time migration: upload existing tts_cache to GCS + Firestore
+// ---------------------------------------------------------------------------
+
+func migrateExistingTTSToCloud() {
+	if gcsClientGlobal == nil || firestoreClient == nil {
+		log.Println("[migrate] skipped – cloud clients not initialized")
+		return
+	}
+
+	dir := ttsCacheDir()
+	indexPath := filepath.Join(dir, "index.json")
+	data, err := os.ReadFile(indexPath)
+	if err != nil {
+		log.Println("[migrate] no index.json found, skipping")
+		return
+	}
+
+	var m map[string]string // text → filename
+	if err := json.Unmarshal(data, &m); err != nil {
+		log.Printf("[migrate] index.json parse error: %v", err)
+		return
+	}
+
+	log.Printf("[migrate] starting migration of %d entries...", len(m))
+
+	migrated, skipped, failed := 0, 0, 0
+	for text, filename := range m {
+		docID := textHash(text)
+
+		// Check if already in Firestore
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		doc, err := firestoreClient.Collection("tts_cache").Doc(docID).Get(ctx)
+		cancel()
+		if err == nil && doc.Exists() {
+			skipped++
+			continue
+		}
+
+		// Read local mp3
+		mp3Path := filepath.Join(dir, filename)
+		audioBytes, err := os.ReadFile(mp3Path)
+		if err != nil {
+			log.Printf("[migrate] read error %s: %v", filename, err)
+			failed++
+			continue
+		}
+
+		syncToCloud(text, filename, audioBytes)
+		migrated++
+
+		// Throttle to avoid overwhelming the API
+		if migrated%50 == 0 {
+			log.Printf("[migrate] progress: %d migrated, %d skipped, %d failed", migrated, skipped, failed)
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+
+	log.Printf("[migrate] done: %d migrated, %d skipped, %d failed (total %d)", migrated, skipped, failed, len(m))
 }
 
 // ---------------------------------------------------------------------------
@@ -2089,6 +2203,36 @@ func main() {
 	loadTTSCache()
 	purgeOldActivityLogs()
 	log.Printf("[init] project root: %s", projectRoot)
+
+	// Store bucket name globally for syncToCloud
+	gcsBucketName = gcsBucket
+
+	// Initialize global GCS client for cloud sync
+	if credPath != "" {
+		gcsCtx := context.Background()
+		var gcsErr error
+		gcsClientGlobal, gcsErr = storage.NewClient(gcsCtx, option.WithCredentialsFile(credPath))
+		if gcsErr != nil {
+			log.Printf("[warn] global GCS client init failed: %v", gcsErr)
+		} else {
+			log.Println("[init] global GCS client ready for TTS sync")
+		}
+	}
+
+	// Initialize Firestore client
+	if credPath != "" {
+		fsCtx := context.Background()
+		fsClient, fsErr := firestore.NewClientWithDatabase(fsCtx, "vertex-jtz", "firestore-test", option.WithCredentialsFile(credPath))
+		if fsErr != nil {
+			log.Printf("[warn] Firestore init failed: %v – running in local-only mode", fsErr)
+		} else {
+			firestoreClient = fsClient
+			log.Println("[init] Firestore connected: vertex-jtz/firestore-test")
+		}
+	}
+
+	// Run one-time migration in background
+	go migrateExistingTTSToCloud()
 
 	http.HandleFunc("/", translateHandler(translateKey, ttsKey))
 	http.HandleFunc("/play", playHandler(ttsKey))

@@ -1136,7 +1136,8 @@ function recogShowQuestion() {
     <button class="recog-no-btn" id="recog-no-btn">✗ 不认识</button>
     <button class="recog-yes-btn" id="recog-yes-btn">✓ 认识</button>
   </div>
-  <div class="recog-hint" id="recog-hint">回车=认识 · 空格=不认识</div>
+  <div class="recog-hint" id="recog-hint">回车=认识 · 空格=不认识 · Esc=提前退出</div>
+  <button class="recog-exit-btn" id="recog-exit-btn">⏏ 提前退出</button>
 </div>
   `;
 
@@ -1152,7 +1153,7 @@ function recogShowQuestion() {
     $('recog-chinese').style.visibility = '';
     $('recog-yes-btn').textContent = '→ 下一个';
     $('recog-no-btn').textContent = '→ 下一个';
-    $('recog-hint').textContent = '回车 / 空格 继续';
+    $('recog-hint').textContent = '回车 / 空格 继续 · Esc=提前退出';
   }
 
   function advance() {
@@ -1164,8 +1165,19 @@ function recogShowQuestion() {
     recogShowQuestion();
   }
 
+  function earlyExit() {
+    window.removeEventListener('keydown', onKey);
+    // If we were in the middle of a reveal, record the current word
+    if (revealed) {
+      if (pendingKnown) s.knownWords.push(word);
+      else s.unknownWords.push(word);
+    }
+    recogShowSummary();
+  }
+
   $('recog-yes-btn').addEventListener('click', () => { if (!revealed) reveal(true); else advance(); });
   $('recog-no-btn').addEventListener('click',  () => { if (!revealed) reveal(false); else advance(); });
+  $('recog-exit-btn').addEventListener('click', earlyExit);
 
   function onKey(e) {
     if (e.key === 'Enter') {
@@ -1174,6 +1186,9 @@ function recogShowQuestion() {
     } else if (e.key === ' ') {
       e.preventDefault();
       if (!revealed) reveal(false); else advance();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      earlyExit();
     }
   }
   window.addEventListener('keydown', onKey);
