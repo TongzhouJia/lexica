@@ -80,10 +80,8 @@ var (
 	ttsCache     sync.Map // TTS cache: text → MP3 file path on disk
 	vocabularyMu sync.Mutex
 
-	// Firestore + GCS global clients for TTS cloud sync
+	// Firestore client used for dictation word lists and clean_sync metadata
 	firestoreClient *firestore.Client
-	gcsClientGlobal *storage.Client
-	gcsBucketName   string // populated in main()
 )
 
 // ---------------------------------------------------------------------------
@@ -221,115 +219,7 @@ func saveTTSAudio(text string, audioBytes []byte) string {
 		os.WriteFile(indexPath, data, 0644)
 	}
 
-	// Async sync to Firestore + GCS (non-blocking)
-	go syncToCloud(text, filename, audioBytes)
-
 	return mp3Path
-}
-
-// ---------------------------------------------------------------------------
-// Cloud sync: upload MP3 to GCS + write Firestore document
-// ---------------------------------------------------------------------------
-
-func syncToCloud(text, filename string, audioBytes []byte) {
-	if gcsClientGlobal == nil {
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	// 1. Upload mp3 to GCS
-	gcsPath := "tts/" + filename
-	w := gcsClientGlobal.Bucket(gcsBucketName).Object(gcsPath).NewWriter(ctx)
-	w.ContentType = "audio/mpeg"
-	w.CacheControl = "public, max-age=31536000"
-	if _, err := w.Write(audioBytes); err != nil {
-		log.Printf("[cloud sync] GCS write error: %v", err)
-		w.Close()
-		return
-	}
-	if err := w.Close(); err != nil {
-		log.Printf("[cloud sync] GCS close error: %v", err)
-		return
-	}
-
-	// 2. Write Firestore document
-	if firestoreClient != nil {
-		docID := textHash(text)
-		_, err := firestoreClient.Collection("tts_cache").Doc(docID).Set(ctx, map[string]interface{}{
-			"text":      text,
-			"filename":  filename,
-			"gcsPath":   gcsPath,
-			"createdAt": firestore.ServerTimestamp,
-		})
-		if err != nil {
-			log.Printf("[cloud sync] Firestore write error: %v", err)
-		} else {
-			log.Printf("[cloud sync] synced: %s → %s", text, gcsPath)
-		}
-	}
-}
-
-// ---------------------------------------------------------------------------
-// One-time migration: upload existing tts_cache to GCS + Firestore
-// ---------------------------------------------------------------------------
-
-func migrateExistingTTSToCloud() {
-	if gcsClientGlobal == nil || firestoreClient == nil {
-		log.Println("[migrate] skipped – cloud clients not initialized")
-		return
-	}
-
-	dir := ttsCacheDir()
-	indexPath := filepath.Join(dir, "index.json")
-	data, err := os.ReadFile(indexPath)
-	if err != nil {
-		log.Println("[migrate] no index.json found, skipping")
-		return
-	}
-
-	var m map[string]string // text → filename
-	if err := json.Unmarshal(data, &m); err != nil {
-		log.Printf("[migrate] index.json parse error: %v", err)
-		return
-	}
-
-	log.Printf("[migrate] starting migration of %d entries...", len(m))
-
-	migrated, skipped, failed := 0, 0, 0
-	for text, filename := range m {
-		docID := textHash(text)
-
-		// Check if already in Firestore
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		doc, err := firestoreClient.Collection("tts_cache").Doc(docID).Get(ctx)
-		cancel()
-		if err == nil && doc.Exists() {
-			skipped++
-			continue
-		}
-
-		// Read local mp3
-		mp3Path := filepath.Join(dir, filename)
-		audioBytes, err := os.ReadFile(mp3Path)
-		if err != nil {
-			log.Printf("[migrate] read error %s: %v", filename, err)
-			failed++
-			continue
-		}
-
-		syncToCloud(text, filename, audioBytes)
-		migrated++
-
-		// Throttle to avoid overwhelming the API
-		if migrated%50 == 0 {
-			log.Printf("[migrate] progress: %d migrated, %d skipped, %d failed", migrated, skipped, failed)
-			time.Sleep(500 * time.Millisecond)
-		}
-	}
-
-	log.Printf("[migrate] done: %d migrated, %d skipped, %d failed (total %d)", migrated, skipped, failed, len(m))
 }
 
 // ---------------------------------------------------------------------------
@@ -1074,45 +964,175 @@ func lexicaAssetHandler(filename, contentType string) http.HandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
-// Dictation endpoints
+// Dictation endpoints (Firestore-backed)
 // ---------------------------------------------------------------------------
 
-const gcsDailyWordPrefix = "study-english/vocabulary-list/daily_english_word/"
+const (
+	dictationCollection = "dictation_days"
+	gcsDailyWordPrefix  = "study-english/vocabulary-list/daily_english_word/"
+)
 
-// dictationDaysHandler – GET /dictation/days → JSON list of available day numbers
-func dictationDaysHandler(bucketName, credPath string) http.HandlerFunc {
+// DictationWord is a single word entry returned to the frontend
+type DictationWord struct {
+	English string `json:"english"`
+	Chinese string `json:"chinese"`
+}
+
+// parseWordsText parses a daily_english_word .txt into DictationWord entries.
+func parseWordsText(text string) []DictationWord {
+	var words []DictationWord
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) >= 2 {
+			words = append(words, DictationWord{
+				English: fields[0],
+				Chinese: strings.Join(fields[1:], " "),
+			})
+		}
+	}
+	return words
+}
+
+// dictWordsToFirestoreSlice converts to a slice acceptable by Firestore.
+func dictWordsToFirestoreSlice(words []DictationWord) []map[string]interface{} {
+	out := make([]map[string]interface{}, 0, len(words))
+	for _, w := range words {
+		out = append(out, map[string]interface{}{
+			"english": w.English,
+			"chinese": w.Chinese,
+		})
+	}
+	return out
+}
+
+// firestoreDocToWords decodes a Firestore dictation_days doc into DictationWord slice.
+func firestoreDocToWords(doc map[string]interface{}) []DictationWord {
+	raw, ok := doc["words"].([]interface{})
+	if !ok {
+		return nil
+	}
+	var words []DictationWord
+	for _, item := range raw {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		eng, _ := m["english"].(string)
+		zh, _ := m["chinese"].(string)
+		if eng == "" {
+			continue
+		}
+		words = append(words, DictationWord{English: eng, Chinese: zh})
+	}
+	return words
+}
+
+// importDailyWordsFromGCS runs once at startup: copies any daily_english_word/*.txt
+// from GCS into Firestore (only if the corresponding doc is missing).
+func importDailyWordsFromGCS(bucketName, credPath string) {
+	if firestoreClient == nil {
+		log.Println("[dict import] skipped – Firestore not initialized")
+		return
+	}
+	if bucketName == "" || credPath == "" {
+		log.Println("[dict import] skipped – GCS bucket/credentials not configured")
+		return
+	}
+
+	ctx := context.Background()
+	client, err := newGCSClient(ctx, credPath)
+	if err != nil {
+		log.Printf("[dict import] GCS client error: %v", err)
+		return
+	}
+	defer client.Close()
+
+	imported, skipped, failed := 0, 0, 0
+	it := client.Bucket(bucketName).Objects(ctx, &storage.Query{Prefix: gcsDailyWordPrefix})
+	for {
+		attrs, err := it.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			log.Printf("[dict import] iterator error: %v", err)
+			return
+		}
+		name := strings.TrimPrefix(attrs.Name, gcsDailyWordPrefix)
+		if !strings.HasSuffix(name, ".txt") || strings.Contains(name, "/") {
+			continue
+		}
+		day := strings.TrimSuffix(name, ".txt")
+
+		docRef := firestoreClient.Collection(dictationCollection).Doc(day)
+		if snap, err := docRef.Get(ctx); err == nil && snap.Exists() {
+			skipped++
+			continue
+		}
+
+		reader, err := client.Bucket(bucketName).Object(attrs.Name).NewReader(ctx)
+		if err != nil {
+			log.Printf("[dict import] read %s error: %v", attrs.Name, err)
+			failed++
+			continue
+		}
+		data, err := io.ReadAll(reader)
+		reader.Close()
+		if err != nil {
+			failed++
+			continue
+		}
+
+		words := parseWordsText(string(data))
+		if _, err := docRef.Set(ctx, map[string]interface{}{
+			"day":       day,
+			"words":     dictWordsToFirestoreSlice(words),
+			"updatedAt": firestore.ServerTimestamp,
+		}); err != nil {
+			log.Printf("[dict import] Firestore write %s error: %v", day, err)
+			failed++
+			continue
+		}
+		imported++
+	}
+	if imported+skipped+failed > 0 {
+		log.Printf("[dict import] done: %d imported, %d skipped, %d failed", imported, skipped, failed)
+	}
+}
+
+// dictationDaysHandler – GET /dictation/days → JSON list of available day names
+func dictationDaysHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		writeCORSHeaders(w)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-
-		ctx := context.Background()
-		client, err := newGCSClient(ctx, credPath)
-		if err != nil {
-			log.Printf("[dictation/days] client error: %v", err)
-			http.Error(w, "GCS client error", http.StatusInternalServerError)
+		if firestoreClient == nil {
+			http.Error(w, "Firestore not configured", http.StatusInternalServerError)
 			return
 		}
-		defer client.Close()
+
+		ctx := r.Context()
+		iter := firestoreClient.Collection(dictationCollection).Documents(ctx)
+		defer iter.Stop()
 
 		var days []string
-		it := client.Bucket(bucketName).Objects(ctx, &storage.Query{Prefix: gcsDailyWordPrefix})
 		for {
-			attrs, err := it.Next()
+			snap, err := iter.Next()
 			if err == iterator.Done {
 				break
 			}
 			if err != nil {
 				log.Printf("[dictation/days] iterator error: %v", err)
-				http.Error(w, "GCS error", http.StatusInternalServerError)
+				http.Error(w, "Firestore error", http.StatusInternalServerError)
 				return
 			}
-			name := strings.TrimPrefix(attrs.Name, gcsDailyWordPrefix)
-			if strings.HasSuffix(name, ".txt") && !strings.Contains(name, "/") {
-				days = append(days, strings.TrimSuffix(name, ".txt"))
-			}
+			days = append(days, snap.Ref.ID)
 		}
 		sort.Strings(days)
 
@@ -1121,18 +1141,16 @@ func dictationDaysHandler(bucketName, credPath string) http.HandlerFunc {
 	}
 }
 
-// DictationWord is a single word entry returned to the frontend
-type DictationWord struct {
-	English string `json:"english"`
-	Chinese string `json:"chinese"`
-}
-
 // dictationWordsHandler – GET /dictation/words?day=XX → JSON word list
-func dictationWordsHandler(bucketName, credPath string) http.HandlerFunc {
+func dictationWordsHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		writeCORSHeaders(w)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if firestoreClient == nil {
+			http.Error(w, "Firestore not configured", http.StatusInternalServerError)
 			return
 		}
 
@@ -1142,49 +1160,108 @@ func dictationWordsHandler(bucketName, credPath string) http.HandlerFunc {
 			return
 		}
 
-		objectName := gcsDailyWordPrefix + day + ".txt"
-
-		ctx := context.Background()
-		client, err := newGCSClient(ctx, credPath)
+		ctx := r.Context()
+		snap, err := firestoreClient.Collection(dictationCollection).Doc(day).Get(ctx)
 		if err != nil {
-			log.Printf("[dictation/words] client error: %v", err)
-			http.Error(w, "GCS client error", http.StatusInternalServerError)
-			return
-		}
-		defer client.Close()
-
-		reader, err := client.Bucket(bucketName).Object(objectName).NewReader(ctx)
-		if err != nil {
-			log.Printf("[dictation/words] read error for %s: %v", objectName, err)
-			http.Error(w, "file not found: "+day+".txt", http.StatusNotFound)
-			return
-		}
-		defer reader.Close()
-
-		data, err := io.ReadAll(reader)
-		if err != nil {
-			http.Error(w, "read error", http.StatusInternalServerError)
+			log.Printf("[dictation/words] read %s error: %v", day, err)
+			http.Error(w, "day not found: "+day, http.StatusNotFound)
 			return
 		}
 
-		var words []DictationWord
-		for _, line := range strings.Split(string(data), "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" {
-				continue
-			}
-			fields := strings.Fields(line)
-			if len(fields) >= 2 {
-				words = append(words, DictationWord{
-					English: fields[0],
-					Chinese: strings.Join(fields[1:], " "),
-				})
-			}
-		}
-
-		log.Printf("[dictation] loaded %d words from %s", len(words), objectName)
+		words := firestoreDocToWords(snap.Data())
+		log.Printf("[dictation] loaded %d words from %s", len(words), day)
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		json.NewEncoder(w).Encode(words)
+	}
+}
+
+// dictationUpdateWordHandler – POST /dictation/update-word
+// body: {day, english, chinese}
+// Updates the chinese translation of a single word in Firestore
+// and also rewrites the local LingoCleaner .txt file if found.
+func dictationUpdateWordHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeCORSHeaders(w)
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, "only POST is allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if firestoreClient == nil {
+			http.Error(w, "Firestore not configured", http.StatusInternalServerError)
+			return
+		}
+
+		var req struct {
+			Day     string `json:"day"`
+			English string `json:"english"`
+			Chinese string `json:"chinese"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		req.Day = strings.TrimSpace(req.Day)
+		req.English = strings.TrimSpace(req.English)
+		req.Chinese = strings.TrimSpace(req.Chinese)
+		if req.Day == "" || req.English == "" {
+			http.Error(w, "missing day or english", http.StatusBadRequest)
+			return
+		}
+
+		ctx := r.Context()
+		docRef := firestoreClient.Collection(dictationCollection).Doc(req.Day)
+		snap, err := docRef.Get(ctx)
+		if err != nil {
+			http.Error(w, "day not found: "+req.Day, http.StatusNotFound)
+			return
+		}
+
+		words := firestoreDocToWords(snap.Data())
+		updated := false
+		for i := range words {
+			if strings.EqualFold(words[i].English, req.English) {
+				words[i].Chinese = req.Chinese
+				updated = true
+				break
+			}
+		}
+		if !updated {
+			http.Error(w, "word not found: "+req.English, http.StatusNotFound)
+			return
+		}
+
+		if _, err := docRef.Set(ctx, map[string]interface{}{
+			"day":       req.Day,
+			"words":     dictWordsToFirestoreSlice(words),
+			"updatedAt": firestore.ServerTimestamp,
+		}); err != nil {
+			log.Printf("[dictation/update-word] Firestore write error: %v", err)
+			http.Error(w, "write error", http.StatusInternalServerError)
+			return
+		}
+
+		// Best-effort local .txt rewrite (LingoCleaner source)
+		localPath := filepath.Join(lingoBaseDir, "daily_english_word", req.Day+".txt")
+		if data, err := os.ReadFile(localPath); err == nil {
+			lines := strings.Split(string(data), "\n")
+			for i, line := range lines {
+				fields := strings.Fields(line)
+				if len(fields) >= 1 && strings.EqualFold(fields[0], req.English) {
+					lines[i] = req.English + " " + req.Chinese
+					break
+				}
+			}
+			os.WriteFile(localPath, []byte(strings.Join(lines, "\n")), 0644)
+		}
+
+		appendActivityLog("dictation_edit", fmt.Sprintf("修改翻译 %s/%s → %s", req.Day, req.English, req.Chinese), nil)
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		json.NewEncoder(w).Encode(map[string]any{"status": "success"})
 	}
 }
 
@@ -1657,7 +1734,7 @@ func cleanHandler() http.HandlerFunc {
 	}
 }
 
-func cleanSyncHandler(gcsBucket, credPath string) http.HandlerFunc {
+func cleanSyncHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "only POST is allowed", http.StatusMethodNotAllowed)
@@ -1670,7 +1747,6 @@ func cleanSyncHandler(gcsBucket, credPath string) http.HandlerFunc {
 			json.Unmarshal(data, &records)
 		}
 
-		// Find unsynced records
 		unsyncedCount := 0
 		for _, r := range records {
 			if r.SyncedAt == "" {
@@ -1683,44 +1759,42 @@ func cleanSyncHandler(gcsBucket, credPath string) http.HandlerFunc {
 			return
 		}
 
-		ctx := context.Background()
-		var client *storage.Client
-		if credPath != "" {
-			client, _ = storage.NewClient(ctx, option.WithCredentialsFile(credPath))
-		} else if os.Getenv("GOOGLE_APPLICATION_CREDENTIALS") != "" {
-			client, _ = storage.NewClient(ctx)
+		if firestoreClient == nil {
+			http.Error(w, "Firestore not configured", http.StatusInternalServerError)
+			return
 		}
 
+		ctx := r.Context()
 		loc := time.FixedZone("UTC+8", 8*60*60)
 		synced := 0
-		if client != nil {
-			for i := range records {
-				if records[i].SyncedAt != "" {
-					continue
-				}
-				if data, err := os.ReadFile(records[i].LocalPath); err == nil {
-					gcsPath := lingoGcsDailyWordPrefix + records[i].FileName
-					writer := client.Bucket(gcsBucket).Object(gcsPath).NewWriter(ctx)
-					writer.ContentType = "text/plain; charset=utf-8"
-					if _, err := writer.Write(data); err == nil {
-						writer.Close()
-						records[i].SyncedAt = time.Now().In(loc).Format(time.RFC3339)
-						synced++
-					} else {
-						writer.Close()
-					}
-				}
+		for i := range records {
+			if records[i].SyncedAt != "" {
+				continue
 			}
-			client.Close()
+			data, err := os.ReadFile(records[i].LocalPath)
+			if err != nil {
+				continue
+			}
+			day := strings.TrimSuffix(records[i].FileName, ".txt")
+			words := parseWordsText(string(data))
+			if _, err := firestoreClient.Collection(dictationCollection).Doc(day).Set(ctx, map[string]interface{}{
+				"day":       day,
+				"words":     dictWordsToFirestoreSlice(words),
+				"updatedAt": firestore.ServerTimestamp,
+			}); err != nil {
+				log.Printf("[clean/sync] Firestore write %s error: %v", day, err)
+				continue
+			}
+			records[i].SyncedAt = time.Now().In(loc).Format(time.RFC3339)
+			synced++
 		}
 
-		// Save back with synced_at markers (logical delete)
 		if data, err := json.MarshalIndent(records, "", "  "); err == nil {
 			os.WriteFile(pendingFile, data, 0644)
 		}
 
 		if synced > 0 {
-			appendActivityLog("clean_sync", fmt.Sprintf("已同步 %d 个文件到云端", synced), nil)
+			appendActivityLog("clean_sync", fmt.Sprintf("已同步 %d 个文件到 Firestore", synced), nil)
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -2204,22 +2278,7 @@ func main() {
 	purgeOldActivityLogs()
 	log.Printf("[init] project root: %s", projectRoot)
 
-	// Store bucket name globally for syncToCloud
-	gcsBucketName = gcsBucket
-
-	// Initialize global GCS client for cloud sync
-	if credPath != "" {
-		gcsCtx := context.Background()
-		var gcsErr error
-		gcsClientGlobal, gcsErr = storage.NewClient(gcsCtx, option.WithCredentialsFile(credPath))
-		if gcsErr != nil {
-			log.Printf("[warn] global GCS client init failed: %v", gcsErr)
-		} else {
-			log.Println("[init] global GCS client ready for TTS sync")
-		}
-	}
-
-	// Initialize Firestore client
+	// Initialize Firestore client (used for dictation word lists)
 	if credPath != "" {
 		fsCtx := context.Background()
 		fsClient, fsErr := firestore.NewClientWithDatabase(fsCtx, "vertex-jtz", "firestore-test", option.WithCredentialsFile(credPath))
@@ -2231,8 +2290,8 @@ func main() {
 		}
 	}
 
-	// Run one-time migration in background
-	go migrateExistingTTSToCloud()
+	// One-time import: copy daily_english_word/*.txt from GCS into Firestore
+	go importDailyWordsFromGCS(gcsBucket, credPath)
 
 	http.HandleFunc("/", translateHandler(translateKey, ttsKey))
 	http.HandleFunc("/play", playHandler(ttsKey))
@@ -2242,15 +2301,16 @@ func main() {
 	http.HandleFunc("/lexica.js", lexicaAssetHandler("lexica.js", "application/javascript; charset=utf-8"))
 	http.HandleFunc("/gcs/list", gcsListHandler(gcsBucket, gcsPrefix, credPath))
 	http.HandleFunc("/gcs/download", gcsDownloadHandler(gcsBucket, gcsPrefix, credPath))
-	http.HandleFunc("/dictation/days", dictationDaysHandler(gcsBucket, credPath))
-	http.HandleFunc("/dictation/words", dictationWordsHandler(gcsBucket, credPath))
+	http.HandleFunc("/dictation/days", dictationDaysHandler())
+	http.HandleFunc("/dictation/words", dictationWordsHandler())
+	http.HandleFunc("/dictation/update-word", dictationUpdateWordHandler())
 	http.HandleFunc("/dictation/tts", dictationTTSHandler(ttsKey))
 	http.HandleFunc("/trace/record", traceRecordHandler())
 	http.HandleFunc("/trace/list", traceListHandler())
 	http.HandleFunc("/trace/delete", traceDeleteHandler())
 	http.HandleFunc("/trace/ask", traceAskHandler(geminiKey, geminiModel))
 	http.HandleFunc("/clean", cleanHandler())
-	http.HandleFunc("/clean/sync", cleanSyncHandler(gcsBucket, credPath))
+	http.HandleFunc("/clean/sync", cleanSyncHandler())
 	http.HandleFunc("/activity/list", activityLogListHandler())
 	http.HandleFunc("/gmail/auth", gmailAuthHandler())
 	http.HandleFunc("/gmail/callback", gmailCallbackHandler())

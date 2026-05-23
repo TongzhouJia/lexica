@@ -986,18 +986,19 @@ main {
   }
 
   #dictation-panel {
-    right: 12px;
-    left: 12px;
-    width: auto;
-    height: 70vh;
+    top: 50%;
+    left: 50%;
+    width: calc(100vw - 16px);
+    height: calc(100vh - 16px);
   }
 }
 
 /* ========== DICTATION PANEL (dark gradient theme) ========== */
 #dictation-panel {
   position: fixed;
-  right: 24px;
-  bottom: 24px;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
   z-index: 100;
   background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
   border: 1px solid rgba(255, 255, 255, 0.12);
@@ -1006,20 +1007,25 @@ main {
     0 20px 50px rgba(0, 0, 0, 0.5),
     0 4px 12px rgba(0, 0, 0, 0.3),
     0 0 0 1px rgba(167, 139, 250, 0.1) inset;
-  width: 460px;
+  width: min(1100px, 86vw);
   min-width: 300px;
   min-height: 300px;
   max-width: calc(100vw - 32px);
-  height: 560px;
-  max-height: calc(100vh - 120px);
+  height: min(820px, 84vh);
+  max-height: calc(100vh - 32px);
   display: none;
   flex-direction: column;
   overflow: hidden;
   resize: both;
-  transform-origin: bottom right;
-  animation: pop 0.22s cubic-bezier(0.34, 1.4, 0.64, 1);
+  transform-origin: center;
+  animation: popCenter 0.22s cubic-bezier(0.34, 1.4, 0.64, 1);
   font-family: 'Segoe UI', system-ui, sans-serif;
   color: #e0e0e0;
+}
+
+@keyframes popCenter {
+  from { opacity: 0; transform: translate(-50%, -50%) scale(0.92); }
+  to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 }
 
 #dictation-panel.visible {
@@ -1771,8 +1777,9 @@ main {
 
 #recognition-panel {
   position: fixed;
-  right: 24px;
-  bottom: 24px;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
   z-index: 100;
   background: linear-gradient(135deg, #0f1f0f, #1a2e1a, #0f1f2e);
   border: 1px solid rgba(255, 255, 255, 0.12);
@@ -1781,18 +1788,18 @@ main {
     0 20px 50px rgba(0, 0, 0, 0.5),
     0 4px 12px rgba(0, 0, 0, 0.3),
     0 0 0 1px rgba(74, 222, 128, 0.1) inset;
-  width: 460px;
+  width: min(1100px, 86vw);
   min-width: 300px;
   min-height: 300px;
   max-width: calc(100vw - 32px);
-  height: 480px;
-  max-height: calc(100vh - 120px);
+  height: min(780px, 84vh);
+  max-height: calc(100vh - 32px);
   display: none;
   flex-direction: column;
   overflow: hidden;
   resize: both;
-  transform-origin: bottom right;
-  animation: pop 0.22s cubic-bezier(0.34, 1.4, 0.64, 1);
+  transform-origin: center;
+  animation: popCenter 0.22s cubic-bezier(0.34, 1.4, 0.64, 1);
   font-family: 'Segoe UI', system-ui, sans-serif;
   color: #e0e0e0;
 }
@@ -1915,10 +1922,70 @@ main {
   margin-top: 4px;
 }
 
+.recog-replay-btn {
+  margin-top: -4px;
+}
+
+.recog-reveal-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  animation: fadeIn 0.2s ease;
+}
+
+.recog-edit-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #c4b5fd;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  font-size: 0.85em;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.recog-edit-btn:hover {
+  background: rgba(167, 139, 250, 0.3);
+  border-color: rgba(167, 139, 250, 0.5);
+  color: #fff;
+}
+
 .recog-btn-row {
   display: flex;
   gap: 16px;
   margin-top: 8px;
+}
+
+.recog-next-btn {
+  padding: 14px 32px;
+  font-size: 1em;
+  font-weight: 600;
+  border-radius: 12px;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  background: rgba(56, 189, 248, 0.18);
+  color: #7dd3fc;
+  cursor: pointer;
+  transition: all 0.18s;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  min-width: 140px;
+}
+
+.recog-next-btn:hover {
+  background: rgba(56, 189, 248, 0.35);
+  transform: scale(1.05);
+}
+
+.recog-summary-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  margin-top: 12px;
+  flex-wrap: wrap;
 }
 
 .recog-no-btn,
@@ -1974,8 +2041,10 @@ main {
 
 @media (max-width: 600px) {
   #recognition-panel {
-    right: 8px;
-    bottom: 8px;
+    top: 50%;
+    left: 50%;
+    width: calc(100vw - 16px);
+    height: calc(100vh - 16px);
   }
 }
 

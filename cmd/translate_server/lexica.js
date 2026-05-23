@@ -952,6 +952,7 @@ function recogPlacePanel(left, top, width, height) {
   recogPanel.style.top = `${clamp(top, margin, maxTop)}px`;
   recogPanel.style.right = 'auto';
   recogPanel.style.bottom = 'auto';
+  recogPanel.style.transform = 'none';
 }
 
 recogHeader.addEventListener('pointerdown', (e) => {
@@ -1108,6 +1109,7 @@ function recogStartSession(words, dayName) {
 
   $('recog-title').textContent = `认词 · ${dayName}`;
   flash(`已加载 ${words.length} 个单词，开始认词！`);
+  preloadTTSBatch(shuffled);
   recogShowQuestion();
 }
 
@@ -1131,8 +1133,12 @@ function recogShowQuestion() {
     <div class="recog-progress-fill" style="width: ${pct}%"></div>
   </div>
   <div class="recog-english">${escapeHTML(word.english)}</div>
-  <div class="recog-chinese-reveal" id="recog-chinese" style="visibility:hidden">${escapeHTML(word.chinese)}</div>
-  <div class="recog-btn-row">
+  <button class="dict-play-btn recog-replay-btn" id="recog-replay-btn">🔊 重听</button>
+  <div class="recog-reveal-row" id="recog-reveal-row" style="visibility:hidden">
+    <span class="recog-chinese-reveal" id="recog-chinese">${escapeHTML(word.chinese)}</span>
+    <button class="recog-edit-btn" id="recog-edit-btn" title="修改翻译">✎</button>
+  </div>
+  <div class="recog-btn-row" id="recog-btn-row">
     <button class="recog-no-btn" id="recog-no-btn">✗ 不认识</button>
     <button class="recog-yes-btn" id="recog-yes-btn">✓ 认识</button>
   </div>
@@ -1146,14 +1152,21 @@ function recogShowQuestion() {
   let revealed = false;
   let pendingKnown = null;
 
+  const revealRow = $('recog-reveal-row');
+  const btnRow = $('recog-btn-row');
+  const hintEl = $('recog-hint');
+  const replayBtn = $('recog-replay-btn');
+  const editBtn = $('recog-edit-btn');
+  const chineseEl = $('recog-chinese');
+
   function reveal(known) {
     if (revealed) return;
     revealed = true;
     pendingKnown = known;
-    $('recog-chinese').style.visibility = '';
-    $('recog-yes-btn').textContent = '→ 下一个';
-    $('recog-no-btn').textContent = '→ 下一个';
-    $('recog-hint').textContent = '回车 / 空格 继续 · Esc=提前退出';
+    revealRow.style.visibility = '';
+    btnRow.innerHTML = '<button class="recog-next-btn" id="recog-next-btn">→ 下一个</button>';
+    $('recog-next-btn').addEventListener('click', advance);
+    hintEl.textContent = '回车 / 空格 继续 · Esc=提前退出';
   }
 
   function advance() {
@@ -1167,7 +1180,6 @@ function recogShowQuestion() {
 
   function earlyExit() {
     window.removeEventListener('keydown', onKey);
-    // If we were in the middle of a reveal, record the current word
     if (revealed) {
       if (pendingKnown) s.knownWords.push(word);
       else s.unknownWords.push(word);
@@ -1175,9 +1187,32 @@ function recogShowQuestion() {
     recogShowSummary();
   }
 
+  async function editTranslation() {
+    const current = chineseEl.textContent;
+    const next = prompt(`修改 "${word.english}" 的翻译：`, current);
+    if (next == null) return;
+    const trimmed = next.trim();
+    if (trimmed === '' || trimmed === current) return;
+    try {
+      const res = await fetch(`${apiBase()}/dictation/update-word`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ day: recogState.dayName.split(' ')[0], english: word.english, chinese: trimmed }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      word.chinese = trimmed;
+      chineseEl.textContent = trimmed;
+      flash('翻译已更新');
+    } catch (err) {
+      flash(`修改失败：${err.message || err}`, true);
+    }
+  }
+
   $('recog-yes-btn').addEventListener('click', () => { if (!revealed) reveal(true); else advance(); });
   $('recog-no-btn').addEventListener('click',  () => { if (!revealed) reveal(false); else advance(); });
   $('recog-exit-btn').addEventListener('click', earlyExit);
+  replayBtn.addEventListener('click', () => dictPlayTTS(word.english));
+  editBtn.addEventListener('click', editTranslation);
 
   function onKey(e) {
     if (e.key === 'Enter') {
@@ -1237,8 +1272,9 @@ function recogShowSummary() {
     ${knownHTML}
   </div>
   ${csvBtns}
-  <div style="text-align:center;margin-top:12px">
-    <button class="dict-start-btn" id="recog-retry">再来一次</button>
+  <div class="recog-summary-actions">
+    <button class="dict-start-btn" id="recog-home">⌂ 回主页</button>
+    <button class="dict-start-btn" id="recog-redo">↻ 重新本课</button>
   </div>
 </div>
   `;
@@ -1248,7 +1284,8 @@ function recogShowSummary() {
   if (dlKnown) dlKnown.addEventListener('click', () => dictDownloadCSV(s.knownWords, `${s.dayName}_known.csv`));
   if (dlUnknown) dlUnknown.addEventListener('click', () => dictDownloadCSV(s.unknownWords, `${s.dayName}_unknown.csv`));
 
-  $('recog-retry').addEventListener('click', recogReset);
+  $('recog-home').addEventListener('click', recogReset);
+  $('recog-redo').addEventListener('click', () => recogStartSession(s.words, s.dayName));
   $('recog-title').textContent = '认词模式';
 }
 
@@ -1269,6 +1306,7 @@ function dictPlacePanel(left, top, width, height) {
   dictPanel.style.top = `${clamp(top, margin, maxTop)}px`;
   dictPanel.style.right = 'auto';
   dictPanel.style.bottom = 'auto';
+  dictPanel.style.transform = 'none';
 }
 
 dictHeader.addEventListener('pointerdown', (e) => {
@@ -1433,14 +1471,64 @@ function dictStartSession(words, dayName) {
 
   $('dict-title').textContent = `听写 · ${dayName}`;
   flash(`已加载 ${words.length} 个单词，开始听写！`);
+  preloadTTSBatch(shuffled);
   dictShowQuestion();
 }
 
-// ---- Play TTS in browser ----
+// ---- TTS cache (browser-side, populated by preload) ----
+// text → { url: blobURL, loading: Promise } so concurrent requests dedupe
+const ttsBlobCache = new Map();
+
+function ttsURLFor(text) {
+  return `${apiBase()}/dictation/tts?text=${encodeURIComponent(text)}`;
+}
+
+// Fetches the MP3 once and stores a blob URL in ttsBlobCache. No-op if cached.
+function preloadTTS(text) {
+  if (!text) return Promise.resolve(null);
+  const existing = ttsBlobCache.get(text);
+  if (existing) return existing.loading || Promise.resolve(existing.url);
+
+  const entry = { url: null, loading: null };
+  ttsBlobCache.set(text, entry);
+  entry.loading = (async () => {
+    try {
+      const res = await fetch(ttsURLFor(text));
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      entry.url = URL.createObjectURL(blob);
+      entry.loading = null;
+      return entry.url;
+    } catch (err) {
+      ttsBlobCache.delete(text);
+      console.warn('preload TTS failed:', text, err);
+      return null;
+    }
+  })();
+  return entry.loading;
+}
+
+// Preload an array of {english} entries with bounded concurrency
+async function preloadTTSBatch(words, concurrency = 4) {
+  if (!words || !words.length) return;
+  const queue = words.map(w => w.english).filter(Boolean);
+  let idx = 0;
+  async function worker() {
+    while (idx < queue.length) {
+      const i = idx++;
+      await preloadTTS(queue[i]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker));
+}
+
 function dictPlayTTS(text) {
-  const url = `${apiBase()}/dictation/tts?text=${encodeURIComponent(text)}`;
-  const audio = new Audio(url);
+  const cached = ttsBlobCache.get(text);
+  const src = (cached && cached.url) ? cached.url : ttsURLFor(text);
+  const audio = new Audio(src);
   audio.play().catch(err => console.warn('TTS play failed:', err));
+  // Kick off preload if not in cache so future plays are instant
+  if (!cached) preloadTTS(text);
   return audio;
 }
 
@@ -1567,11 +1655,11 @@ function dictShowQuestion() {
       // Correct!
       answerInput.classList.add('correct');
       answerInput.classList.remove('wrong');
-      feedbackEl.textContent = '✅ 回答正确！';
+      feedbackEl.textContent = '✅ 回答正确！按回车继续';
       feedbackEl.className = 'dict-feedback correct';
       revealEl.textContent = `${word.english} : ${word.chinese}`;
       playBtn.style.display = '';
-      answerInput.disabled = true;
+      answerInput.readOnly = true;
 
       if (s.isFirstTry) {
         s.correctWords.push(word);
@@ -1584,14 +1672,8 @@ function dictShowQuestion() {
       currentTrace.totalMs = correctNow - wordStartTime;
       s.attempts.push(currentTrace);
 
-      // Play TTS
       dictPlayTTS(word.english);
-
-      // Auto-advance after 1.5s
-      setTimeout(() => {
-        s.currentIdx++;
-        dictShowQuestion();
-      }, 1500);
+      awaitingNextEnter = true;
     } else {
       // Wrong
       answerInput.classList.add('wrong');
