@@ -1265,6 +1265,88 @@ func dictationUpdateWordHandler() http.HandlerFunc {
 	}
 }
 
+// dictationLoadCSVHandler – POST /dictation/load-csv
+// body: {path}
+// Reads a CSV from the local filesystem and returns its rows as DictationWord list.
+// Expected format (the same one /dictation download produces):
+//
+//	English,Chinese
+//	"hello","你好"
+//	"world","世界"
+func dictationLoadCSVHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeCORSHeaders(w)
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, "only POST is allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var req struct {
+			Path string `json:"path"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		path := strings.TrimSpace(req.Path)
+		if path == "" {
+			http.Error(w, "missing path", http.StatusBadRequest)
+			return
+		}
+		// Allow ~ expansion for convenience
+		if strings.HasPrefix(path, "~/") {
+			if home, err := os.UserHomeDir(); err == nil {
+				path = filepath.Join(home, path[2:])
+			}
+		}
+		if !strings.EqualFold(filepath.Ext(path), ".csv") {
+			http.Error(w, "only .csv files are supported", http.StatusBadRequest)
+			return
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			http.Error(w, "read error: "+err.Error(), http.StatusNotFound)
+			return
+		}
+		if bytes.HasPrefix(data, []byte("\xEF\xBB\xBF")) {
+			data = data[3:]
+		}
+
+		reader := csv.NewReader(bytes.NewReader(data))
+		reader.FieldsPerRecord = -1
+		rows, err := reader.ReadAll()
+		if err != nil {
+			http.Error(w, "csv parse error: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		var words []DictationWord
+		for i, row := range rows {
+			if len(row) < 2 {
+				continue
+			}
+			if i == 0 && strings.EqualFold(strings.TrimSpace(row[0]), "English") {
+				continue
+			}
+			eng := strings.TrimSpace(row[0])
+			zh := strings.TrimSpace(row[1])
+			if eng == "" {
+				continue
+			}
+			words = append(words, DictationWord{English: eng, Chinese: zh})
+		}
+
+		log.Printf("[dictation/load-csv] loaded %d words from %s", len(words), path)
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		json.NewEncoder(w).Encode(words)
+	}
+}
+
 // dictationTTSHandler – GET /dictation/tts?text=X → MP3 audio
 // Uses the same TTS cache as gsay / translate_server play
 func dictationTTSHandler(ttsKey string) http.HandlerFunc {
@@ -2304,6 +2386,7 @@ func main() {
 	http.HandleFunc("/dictation/days", dictationDaysHandler())
 	http.HandleFunc("/dictation/words", dictationWordsHandler())
 	http.HandleFunc("/dictation/update-word", dictationUpdateWordHandler())
+	http.HandleFunc("/dictation/load-csv", dictationLoadCSVHandler())
 	http.HandleFunc("/dictation/tts", dictationTTSHandler(ttsKey))
 	http.HandleFunc("/trace/record", traceRecordHandler())
 	http.HandleFunc("/trace/list", traceListHandler())

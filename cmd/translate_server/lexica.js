@@ -993,12 +993,73 @@ function openRecognition() {
   }
 }
 
+// ---- CSV-path loading helpers (shared by recognition + dictation) ----
+async function loadWordsFromCSVPath(path) {
+  const res = await fetch(`${apiBase()}/dictation/load-csv`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  });
+  if (!res.ok) {
+    const body = (await res.text()).trim();
+    throw new Error(body || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+function csvLabelFromPath(path) {
+  const base = (path.split(/[/\\]/).pop() || path).trim();
+  return base.replace(/\.csv$/i, '');
+}
+
+// Renders a "paste CSV path" form into the given body element.
+// onLoaded(words, label) is called once the CSV is parsed.
+function showCustomPathScreen(bodyEl, onBack, onLoaded) {
+  bodyEl.innerHTML = `
+<div class="dict-setup">
+  <div class="dict-setup-label">粘贴 CSV 文件路径</div>
+  <input type="text" id="custom-path-input" class="custom-path-input" placeholder="/Users/.../xxx.csv" autocomplete="off" spellcheck="false" />
+  <div class="recog-summary-actions">
+    <button class="dict-back-btn" id="custom-path-back">← 返回</button>
+    <button class="dict-start-btn" id="custom-path-load">加载</button>
+  </div>
+  <div class="dict-loading" id="custom-path-msg"></div>
+</div>
+  `;
+  const input = bodyEl.querySelector('#custom-path-input');
+  const loadMsg = bodyEl.querySelector('#custom-path-msg');
+  setTimeout(() => input.focus(), 50);
+
+  bodyEl.querySelector('#custom-path-back').addEventListener('click', onBack);
+
+  async function go() {
+    const path = input.value.trim();
+    if (!path) {
+      loadMsg.textContent = '❌ 请粘贴 CSV 文件路径';
+      return;
+    }
+    loadMsg.textContent = `正在加载 ${path} ...`;
+    try {
+      const words = await loadWordsFromCSVPath(path);
+      if (!words || !words.length) throw new Error('CSV 文件中没有单词');
+      onLoaded(words, csvLabelFromPath(path));
+    } catch (err) {
+      loadMsg.textContent = `❌ ${err.message}`;
+    }
+  }
+  bodyEl.querySelector('#custom-path-load').addEventListener('click', go);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); go(); }
+  });
+}
+
 // ---- Recognition Setup Screen ----
 function recogShowSetup() {
   recogBody.innerHTML = `
 <div class="dict-setup">
   <div class="dict-setup-label">认哪一天？</div>
   <div class="dict-day-grid" id="recog-day-grid"></div>
+  <button class="dict-back-btn" id="recog-custom-btn">📂 自定义 CSV 路径...</button>
   <div class="dict-loading" id="recog-load-msg"></div>
 </div>
   `;
@@ -1032,6 +1093,10 @@ function recogShowSetup() {
     });
     grid.appendChild(btn);
   }
+
+  $('recog-custom-btn').addEventListener('click', () => {
+    showCustomPathScreen(recogBody, recogShowSetup, (words, label) => recogShowPortionPicker(words, label));
+  });
 }
 
 // ---- Recognition Portion Picker ----
@@ -1354,6 +1419,7 @@ function dictShowSetup() {
 <div class="dict-setup">
   <div class="dict-setup-label">听写哪一天？</div>
   <div class="dict-day-grid" id="dict-day-grid"></div>
+  <button class="dict-back-btn" id="dict-custom-btn">📂 自定义 CSV 路径...</button>
   <div class="dict-loading" id="dict-load-msg"></div>
 </div>
   `;
@@ -1390,6 +1456,10 @@ function dictShowSetup() {
     });
     grid.appendChild(btn);
   }
+
+  $('dict-custom-btn').addEventListener('click', () => {
+    showCustomPathScreen(dictBody, dictShowSetup, (words, label) => dictShowPortionPicker(words, label));
+  });
 }
 
 // ---- Portion Picker ----
