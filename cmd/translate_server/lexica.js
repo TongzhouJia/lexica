@@ -993,6 +993,48 @@ function openRecognition() {
   }
 }
 
+// ---- Session history screen (shared by recognition + dictation) ----
+async function showSessionHistoryScreen(bodyEl, modeMatcher, onBack) {
+  bodyEl.innerHTML = `
+<div class="dict-setup">
+  <div class="dict-setup-label">最近 10 次记录</div>
+  <div class="session-list" id="session-list">加载中...</div>
+  <button class="dict-back-btn" id="session-back">← 返回</button>
+</div>
+  `;
+  bodyEl.querySelector('#session-back').addEventListener('click', onBack);
+  const listEl = bodyEl.querySelector('#session-list');
+  try {
+    const res = await fetch(`${apiBase()}/session/list`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const items = await res.json();
+    const filtered = modeMatcher ? items.filter(modeMatcher) : items;
+    if (!filtered.length) {
+      listEl.textContent = '暂无记录';
+      return;
+    }
+    listEl.innerHTML = filtered.map(item => {
+      const ts = String(item.timestamp || '').replace('T', ' ').replace(/\+.*$/, '');
+      const idEnc = encodeURIComponent(item.id);
+      const dlGood = item.goodCount > 0
+        ? `<a class="dict-csv-btn" href="${apiBase()}/session/csv?id=${idEnc}&kind=good" download>⬇ ${escapeHTML(item.goodLabel)} ${item.goodCount}</a>`
+        : '';
+      const dlBad = item.badCount > 0
+        ? `<a class="dict-csv-btn" href="${apiBase()}/session/csv?id=${idEnc}&kind=bad" download>⬇ ${escapeHTML(item.badLabel)} ${item.badCount}</a>`
+        : '';
+      return `<div class="session-item">
+  <div class="session-meta">
+    <span class="session-time">${escapeHTML(ts)}</span>
+    <span class="session-day">${escapeHTML(item.dayName || '')}</span>
+  </div>
+  <div class="dict-csv-row">${dlGood}${dlBad}</div>
+</div>`;
+    }).join('');
+  } catch (err) {
+    listEl.textContent = `❌ ${err.message}`;
+  }
+}
+
 // ---- CSV-path loading helpers (shared by recognition + dictation) ----
 async function loadWordsFromCSVPath(path) {
   const res = await fetch(`${apiBase()}/dictation/load-csv`, {
@@ -1059,7 +1101,10 @@ function recogShowSetup() {
 <div class="dict-setup">
   <div class="dict-setup-label">认哪一天？</div>
   <div class="dict-day-grid" id="recog-day-grid"></div>
-  <button class="dict-back-btn" id="recog-custom-btn">📂 自定义 CSV 路径...</button>
+  <div class="setup-aux-row">
+    <button class="dict-back-btn" id="recog-custom-btn">📂 自定义 CSV 路径...</button>
+    <button class="dict-back-btn" id="recog-history-btn">📜 历史会话</button>
+  </div>
   <div class="dict-loading" id="recog-load-msg"></div>
 </div>
   `;
@@ -1096,6 +1141,9 @@ function recogShowSetup() {
 
   $('recog-custom-btn').addEventListener('click', () => {
     showCustomPathScreen(recogBody, recogShowSetup, (words, label) => recogShowPortionPicker(words, label));
+  });
+  $('recog-history-btn').addEventListener('click', () => {
+    showSessionHistoryScreen(recogBody, (s) => s.mode === 'recognition', recogShowSetup);
   });
 }
 
@@ -1352,12 +1400,34 @@ function recogShowSummary() {
   $('recog-home').addEventListener('click', recogReset);
   $('recog-redo').addEventListener('click', () => recogStartSession(s.words, s.dayName));
   $('recog-title').textContent = '认词模式';
+
+  saveSession({
+    mode: 'recognition',
+    dayName: s.dayName,
+    goodLabel: '认识',
+    badLabel: '不认识',
+    goodWords: s.knownWords,
+    badWords: s.unknownWords,
+  });
 }
 
 function recogReset() {
   recogState = { words: [], shuffled: [], currentIdx: 0, knownWords: [], unknownWords: [], dayName: '' };
   $('recog-title').textContent = '认词模式';
   recogShowSetup();
+}
+
+async function saveSession(payload) {
+  if (!payload.goodWords.length && !payload.badWords.length) return;
+  try {
+    await fetch(`${apiBase()}/session/record`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    console.warn('session save failed:', err);
+  }
 }
 
 // Drag support for dictation panel (same pattern as popup)
@@ -1419,7 +1489,10 @@ function dictShowSetup() {
 <div class="dict-setup">
   <div class="dict-setup-label">听写哪一天？</div>
   <div class="dict-day-grid" id="dict-day-grid"></div>
-  <button class="dict-back-btn" id="dict-custom-btn">📂 自定义 CSV 路径...</button>
+  <div class="setup-aux-row">
+    <button class="dict-back-btn" id="dict-custom-btn">📂 自定义 CSV 路径...</button>
+    <button class="dict-back-btn" id="dict-history-btn">📜 历史会话</button>
+  </div>
   <div class="dict-loading" id="dict-load-msg"></div>
 </div>
   `;
@@ -1459,6 +1532,9 @@ function dictShowSetup() {
 
   $('dict-custom-btn').addEventListener('click', () => {
     showCustomPathScreen(dictBody, dictShowSetup, (words, label) => dictShowPortionPicker(words, label));
+  });
+  $('dict-history-btn').addEventListener('click', () => {
+    showSessionHistoryScreen(dictBody, (s) => s.mode === 'dictation_strict' || s.mode === 'dictation_skip', dictShowSetup);
   });
 }
 
@@ -1810,8 +1886,16 @@ function dictShowSummary() {
   const s = dictState;
   const practiced = s.correctWords.length + s.incorrectWords.length;
 
-  // Persist the per-word attempts to the server (fire-and-forget)
+  // Persist the per-word attempts and a session record (fire-and-forget)
   saveTrace();
+  saveSession({
+    mode: dictMode === 'skip' ? 'dictation_skip' : 'dictation_strict',
+    dayName: s.dayName,
+    goodLabel: '正确',
+    badLabel: '错误',
+    goodWords: s.correctWords,
+    badWords: s.incorrectWords,
+  });
 
   if (practiced === 0) {
     dictBody.innerHTML = `

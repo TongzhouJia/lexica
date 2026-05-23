@@ -1988,6 +1988,68 @@ main {
   flex-wrap: wrap;
 }
 
+.setup-aux-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+.setup-aux-row .dict-back-btn {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 60vh;
+  overflow-y: auto;
+  margin: 8px 0;
+}
+
+.session-item {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.session-meta {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  font-size: 0.85em;
+  flex-wrap: wrap;
+}
+
+.session-time {
+  color: rgba(224, 224, 224, 0.5);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.85em;
+}
+
+.session-day {
+  color: #c4b5fd;
+  font-weight: 600;
+}
+
+.session-item .dict-csv-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0;
+}
+
+.session-item .dict-csv-btn {
+  text-decoration: none;
+  display: inline-block;
+}
+
 .custom-path-input {
   width: 100%;
   padding: 10px 14px;
