@@ -5,14 +5,27 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Loop</title>
 <style>
+  /* Warm low-contrast palette (Gruvbox-inspired) — easy on the eyes
+     for long ambient viewing on a secondary screen. */
+  :root {
+    --bg:          #282828;
+    --bg-elev:     #32302f;
+    --text:        #ebdbb2;
+    --text-soft:   #a89984;
+    --text-faint:  #665c54;
+    --border:      #504945;
+    --accent:      #d5c4a1;
+    --accent-warm: #fabd2f;
+  }
+
   * { box-sizing: border-box; }
   html, body {
     margin: 0;
     padding: 0;
     width: 100%;
     height: 100%;
-    background: #000;
-    color: #fff;
+    background: var(--bg);
+    color: var(--text);
     overflow: hidden;
     font-family: 'Helvetica Neue', Arial, system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
@@ -28,7 +41,7 @@
     align-items: center;
     justify-content: center;
     padding: 40px;
-    gap: 18px;
+    gap: 14px;
   }
   #setup.hidden { display: none; }
 
@@ -36,30 +49,31 @@
     font-size: 14px;
     letter-spacing: 0.3em;
     text-transform: uppercase;
-    color: #aaa;
+    color: var(--text-soft);
     margin-bottom: 12px;
   }
   .setup-label {
     font-size: 11px;
     letter-spacing: 0.18em;
     text-transform: uppercase;
-    color: #888;
+    color: var(--text-soft);
     align-self: flex-start;
     width: min(640px, 90vw);
   }
   .setup-input, .setup-textarea {
     width: min(640px, 90vw);
     padding: 12px 14px;
-    background: #000;
-    color: #fff;
-    border: 1px solid #444;
-    border-radius: 0;
+    background: var(--bg-elev);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
     font-family: 'Menlo', 'Monaco', monospace;
     font-size: 13px;
     outline: none;
     transition: border-color 0.15s;
   }
-  .setup-input:focus, .setup-textarea:focus { border-color: #fff; }
+  .setup-input::placeholder, .setup-textarea::placeholder { color: var(--text-faint); }
+  .setup-input:focus, .setup-textarea:focus { border-color: var(--accent); }
   .setup-textarea { min-height: 130px; resize: vertical; line-height: 1.5; }
   .setup-row {
     width: min(640px, 90vw);
@@ -69,39 +83,35 @@
   }
   .setup-btn {
     padding: 10px 22px;
-    background: #fff;
-    color: #000;
+    background: var(--accent);
+    color: var(--bg);
     border: none;
+    border-radius: 4px;
     font-size: 13px;
     letter-spacing: 0.06em;
     cursor: pointer;
     font-family: inherit;
-    transition: opacity 0.15s;
+    transition: background 0.15s;
   }
-  .setup-btn:hover { opacity: 0.85; }
-  .setup-btn.ghost {
-    background: transparent;
-    color: #fff;
-    border: 1px solid #444;
-  }
-  .setup-btn.ghost:hover { border-color: #fff; }
+  .setup-btn:hover { background: var(--text); }
   .setup-interval {
     width: 90px;
   }
   .setup-divider {
     width: min(640px, 90vw);
     height: 1px;
-    background: #222;
-    margin: 14px 0;
+    background: var(--border);
+    margin: 10px 0;
+    opacity: 0.5;
   }
   .setup-msg {
     width: min(640px, 90vw);
     min-height: 18px;
     font-size: 12px;
-    color: #888;
+    color: var(--text-soft);
     font-family: 'Menlo', 'Monaco', monospace;
   }
-  .setup-msg.err { color: #fff; }
+  .setup-msg.err { color: #fb4934; }
 
   /* --- Display screen (the main event) --- */
   #stage {
@@ -133,8 +143,8 @@
     user-select: none;
   }
 
-  .word-en { color: #fff; }
-  .word-zh { color: #fff; font-weight: 500; }
+  .word-en { color: var(--text); }
+  .word-zh { color: var(--accent); font-weight: 500; }
 
   /* Faint exit button — fades in on hover/mousemove */
   #exit-btn {
@@ -142,7 +152,7 @@
     top: 14px;
     right: 18px;
     background: transparent;
-    color: #555;
+    color: var(--text-faint);
     border: none;
     font-size: 22px;
     cursor: pointer;
@@ -152,8 +162,8 @@
     z-index: 10;
     font-family: inherit;
   }
-  #exit-btn:hover { color: #fff; }
-  body.show-controls #exit-btn { opacity: 0.55; }
+  #exit-btn:hover { color: var(--text); }
+  body.show-controls #exit-btn { opacity: 0.65; }
 </style>
 </head>
 <body>
@@ -414,23 +424,33 @@ window.addEventListener('resize', () => {
   if (!stageEl.classList.contains('hidden')) render();
 });
 
+function loadWordsAndShow(list) {
+  if (!Array.isArray(list) || !list.length) return;
+  words = list;
+  idx = 0;
+  paused = false;
+  intervalMs = Math.max(1, getInterval()) * 1000;
+  setupEl.classList.add('hidden');
+  stageEl.classList.remove('hidden');
+  render();
+  startCycle();
+}
+
 // --- Auto-restore previous session on page load ---
 (function tryRestore() {
   try {
     const raw = localStorage.getItem(LS.words);
     if (!raw) return;
-    const list = JSON.parse(raw);
-    if (Array.isArray(list) && list.length) {
-      words = list;
-      idx = 0;
-      intervalMs = Math.max(1, getInterval()) * 1000;
-      setupEl.classList.add('hidden');
-      stageEl.classList.remove('hidden');
-      render();
-      startCycle();
-    }
+    loadWordsAndShow(JSON.parse(raw));
   } catch (_) { /* ignore */ }
 })();
+
+// --- Listen for word lists pushed from other tabs (dictation/recognition
+//     summary screens write to localStorage and open /loop) ---
+window.addEventListener('storage', (e) => {
+  if (e.key !== LS.words || !e.newValue) return;
+  try { loadWordsAndShow(JSON.parse(e.newValue)); } catch (_) { /* ignore */ }
+});
 </script>
 </body>
 </html>

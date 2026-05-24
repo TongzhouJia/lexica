@@ -1383,10 +1383,10 @@ function recogShowSummary() {
     }
   }
 
-  // CSV buttons: row 1 = download, row 2 = copy to clipboard
+  // CSV buttons: row 1 = send to loop page, row 2 = copy to clipboard
   let csvBtns = '<div class="dict-csv-row">';
-  if (s.knownWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="recog-dl-known">⬇ 认识的 CSV</button>`;
-  if (s.unknownWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="recog-dl-unknown">⬇ 不认识的 CSV</button>`;
+  if (s.knownWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="recog-lp-known">🔁 循环认识的</button>`;
+  if (s.unknownWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="recog-lp-unknown">🔁 循环不认识的</button>`;
   csvBtns += '</div><div class="dict-csv-row">';
   if (s.knownWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="recog-cp-known">📋 复制认识的</button>`;
   if (s.unknownWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="recog-cp-unknown">📋 复制不认识的</button>`;
@@ -1413,12 +1413,12 @@ function recogShowSummary() {
 </div>
   `;
 
-  const dlKnown   = $('recog-dl-known');
-  const dlUnknown = $('recog-dl-unknown');
+  const lpKnown   = $('recog-lp-known');
+  const lpUnknown = $('recog-lp-unknown');
   const cpKnown   = $('recog-cp-known');
   const cpUnknown = $('recog-cp-unknown');
-  if (dlKnown)   dlKnown.addEventListener('click', () => dictDownloadCSV(s.knownWords, `${s.dayName}_known.csv`));
-  if (dlUnknown) dlUnknown.addEventListener('click', () => dictDownloadCSV(s.unknownWords, `${s.dayName}_unknown.csv`));
+  if (lpKnown)   lpKnown.addEventListener('click', () => dictSendToLoop(s.knownWords, '认识的'));
+  if (lpUnknown) lpUnknown.addEventListener('click', () => dictSendToLoop(s.unknownWords, '不认识的'));
   if (cpKnown)   cpKnown.addEventListener('click', () => dictCopyCSV(s.knownWords, '认识的单词'));
   if (cpUnknown) cpUnknown.addEventListener('click', () => dictCopyCSV(s.unknownWords, '不认识的单词'));
 
@@ -1897,17 +1897,6 @@ function dictWordsToCSV(words) {
   return csv;
 }
 
-function dictDownloadCSV(words, filename) {
-  const csv = dictWordsToCSV(words);
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
 async function dictCopyCSV(words, label) {
   try {
     await navigator.clipboard.writeText(dictWordsToCSV(words));
@@ -1915,6 +1904,24 @@ async function dictCopyCSV(words, label) {
   } catch (err) {
     flash('复制失败: ' + err.message, true);
   }
+}
+
+// Push a word list to the /loop page (opens it in a named tab so repeated
+// sends reuse the same window). The loop page picks up new words via a
+// `storage` event if it's already open.
+function dictSendToLoop(words, label) {
+  if (!words || !words.length) {
+    flash('没有可循环的单词', true);
+    return;
+  }
+  try {
+    localStorage.setItem('loop.words', JSON.stringify(words));
+  } catch (err) {
+    flash('保存失败: ' + err.message, true);
+    return;
+  }
+  window.open('/loop', 'lexica-loop');
+  flash(`已发送 ${label}（${words.length} 词）到循环页`);
 }
 
 // ---- Summary Screen ----
@@ -1966,10 +1973,10 @@ function dictShowSummary() {
     ? '<div style="text-align:center;margin:8px 0;font-size:1em;color:#4ade80">🎉 完美通关！没有任何错题！</div>'
     : '';
 
-  // CSV buttons: row 1 = download, row 2 = copy to clipboard
+  // CSV buttons: row 1 = send to loop page, row 2 = copy to clipboard
   let csvBtns = '<div class="dict-csv-row">';
-  if (s.correctWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="dict-dl-correct">⬇ 正确单词 CSV</button>`;
-  if (s.incorrectWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="dict-dl-incorrect">⬇ 错误单词 CSV</button>`;
+  if (s.correctWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="dict-lp-correct">🔁 循环正确单词</button>`;
+  if (s.incorrectWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="dict-lp-incorrect">🔁 循环错误单词</button>`;
   csvBtns += '</div><div class="dict-csv-row">';
   if (s.correctWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="dict-cp-correct">📋 复制正确单词</button>`;
   if (s.incorrectWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="dict-cp-incorrect">📋 复制错误单词</button>`;
@@ -2006,12 +2013,12 @@ function dictShowSummary() {
 </div>
   `;
 
-  const dlCorrect = $('dict-dl-correct');
-  const dlIncorrect = $('dict-dl-incorrect');
+  const lpCorrect = $('dict-lp-correct');
+  const lpIncorrect = $('dict-lp-incorrect');
   const cpCorrect = $('dict-cp-correct');
   const cpIncorrect = $('dict-cp-incorrect');
-  if (dlCorrect)   dlCorrect.addEventListener('click', () => dictDownloadCSV(s.correctWords, `${s.dayName}_correct.csv`));
-  if (dlIncorrect) dlIncorrect.addEventListener('click', () => dictDownloadCSV(s.incorrectWords, `${s.dayName}_incorrect.csv`));
+  if (lpCorrect)   lpCorrect.addEventListener('click', () => dictSendToLoop(s.correctWords, '正确单词'));
+  if (lpIncorrect) lpIncorrect.addEventListener('click', () => dictSendToLoop(s.incorrectWords, '错误单词'));
   if (cpCorrect)   cpCorrect.addEventListener('click', () => dictCopyCSV(s.correctWords, '正确单词'));
   if (cpIncorrect) cpIncorrect.addEventListener('click', () => dictCopyCSV(s.incorrectWords, '错误单词'));
 
