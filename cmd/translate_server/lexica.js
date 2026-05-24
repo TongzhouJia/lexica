@@ -2953,18 +2953,20 @@ scalePanel(popup, 420, 16);
         min: todayStartMs,
         max: todayEndMs,
         interval: 3 * 3600 * 1000,
-        axisLine: { lineStyle: { color: 'rgba(255,255,255,0.35)' } },
-        axisTick: { lineStyle: { color: 'rgba(255,255,255,0.35)' } },
+        axisLine: { lineStyle: { color: 'rgba(15,12,41,0.6)', width: 1.5 } },
+        axisTick: { lineStyle: { color: 'rgba(15,12,41,0.6)', width: 1.5 }, length: 6 },
         axisLabel: {
-          color: 'rgba(255,255,255,0.78)',
+          color: '#111827',
           fontFamily: 'JetBrains Mono, monospace',
-          fontSize: 12,
+          fontSize: 15,
+          fontWeight: 600,
+          margin: 12,
           formatter: (val) => {
             const d = new Date(val);
             return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
           }
         },
-        splitLine: { show: true, lineStyle: { color: 'rgba(255,255,255,0.06)' } }
+        splitLine: { show: true, lineStyle: { color: 'rgba(15,12,41,0.08)' } }
       },
       yAxis: { type: 'value', min: Y_MIN, max: Y_MAX, show: false },
       series: [
@@ -3020,14 +3022,15 @@ scalePanel(popup, 420, 16);
           z: 3,
           lineStyle: {
             color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
-              { offset: 0,    color: 'rgba(167,139,250,0.55)' },
-              { offset: 0.15, color: 'rgba(252,211,77,0.85)' },
-              { offset: 0.5,  color: 'rgba(254,243,199,0.95)' },
-              { offset: 0.85, color: 'rgba(251,146,60,0.85)' },
-              { offset: 1,    color: 'rgba(167,139,250,0.55)' }
+              { offset: 0,    color: 'rgba(167,139,250,0.85)' },
+              { offset: 0.15, color: 'rgba(252,211,77,1)' },
+              { offset: 0.5,  color: 'rgba(254,243,199,1)' },
+              { offset: 0.85, color: 'rgba(251,146,60,1)' },
+              { offset: 1,    color: 'rgba(167,139,250,0.85)' }
             ]),
-            width: 2,
-            type: 'dashed'
+            width: 4,
+            shadowBlur: 8,
+            shadowColor: 'rgba(254,243,199,0.5)'
           },
           areaStyle: {
             origin: 'start',
@@ -3061,53 +3064,67 @@ scalePanel(popup, 420, 16);
             data: [{ coord: sunPoint }]
           } : undefined
         },
-        // ---- Dawn marker ----
+        // ---- Phase markers (chip-style, Chinese text, staggered to avoid overlap) ----
+        // Sunrise & sunset chips sit ABOVE the horizon; dawn & dusk chips BELOW.
         {
-          type: 'scatter', symbolSize: 6, silent: true,
-          itemStyle: { color: 'rgba(196,181,253,0.9)', shadowBlur: 6, shadowColor: '#c4b5fd' },
-          label: {
-            show: true, position: 'top', distance: 8,
-            color: '#c4b5fd', fontSize: 11, fontWeight: 600,
-            fontFamily: 'JetBrains Mono, monospace',
-            formatter: `🌌 ${fmtTime(dawnMs)}`
-          },
-          data: [[dawnMs, 0]], z: 4
-        },
-        // ---- Sunrise marker ----
-        {
-          type: 'scatter', symbolSize: 8, silent: true,
+          type: 'scatter', symbolSize: 9, silent: true, z: 5,
           itemStyle: { color: '#fbbf24', shadowBlur: 10, shadowColor: '#fbbf24' },
           label: {
-            show: true, position: 'top', distance: 8,
-            color: '#fcd34d', fontSize: 12, fontWeight: 700,
-            fontFamily: 'JetBrains Mono, monospace',
-            formatter: `🌅 ${fmtTime(sunriseMs)}`
+            show: true, position: 'top', distance: 14,
+            color: '#111827', fontSize: 16, fontWeight: 700,
+            fontFamily: '"Newsreader", "Segoe UI", system-ui, sans-serif',
+            backgroundColor: 'rgba(255,250,240,0.95)',
+            borderColor: 'rgba(180,83,9,0.5)',
+            borderWidth: 1, borderRadius: 6,
+            padding: [5, 10],
+            formatter: `日出 ${fmtTime(sunriseMs)}`
           },
-          data: [[sunriseMs, 0]], z: 4
+          data: [[sunriseMs, 0]]
         },
-        // ---- Sunset marker ----
         {
-          type: 'scatter', symbolSize: 8, silent: true,
+          type: 'scatter', symbolSize: 9, silent: true, z: 5,
           itemStyle: { color: '#fb923c', shadowBlur: 10, shadowColor: '#fb923c' },
           label: {
-            show: true, position: 'top', distance: 8,
-            color: '#fdba74', fontSize: 12, fontWeight: 700,
-            fontFamily: 'JetBrains Mono, monospace',
-            formatter: `🌇 ${fmtTime(sunsetMs)}`
+            show: true, position: 'top', distance: 14,
+            color: '#111827', fontSize: 16, fontWeight: 700,
+            fontFamily: '"Newsreader", "Segoe UI", system-ui, sans-serif',
+            backgroundColor: 'rgba(255,250,240,0.95)',
+            borderColor: 'rgba(180,83,9,0.5)',
+            borderWidth: 1, borderRadius: 6,
+            padding: [5, 10],
+            formatter: `日落 ${fmtTime(sunsetMs)}`
           },
-          data: [[sunsetMs, 0]], z: 4
+          data: [[sunsetMs, 0]]
         },
-        // ---- Dusk marker ----
         {
-          type: 'scatter', symbolSize: 6, silent: true,
-          itemStyle: { color: 'rgba(196,181,253,0.9)', shadowBlur: 6, shadowColor: '#c4b5fd' },
+          type: 'scatter', symbolSize: 7, silent: true, z: 5,
+          itemStyle: { color: 'rgba(196,181,253,0.95)', shadowBlur: 6, shadowColor: '#c4b5fd' },
           label: {
-            show: true, position: 'top', distance: 8,
-            color: '#c4b5fd', fontSize: 11, fontWeight: 600,
-            fontFamily: 'JetBrains Mono, monospace',
-            formatter: `🌌 ${fmtTime(duskMs)}`
+            show: true, position: 'bottom', distance: 14,
+            color: '#111827', fontSize: 14, fontWeight: 600,
+            fontFamily: '"Newsreader", "Segoe UI", system-ui, sans-serif',
+            backgroundColor: 'rgba(241,232,255,0.95)',
+            borderColor: 'rgba(124,58,237,0.5)',
+            borderWidth: 1, borderRadius: 6,
+            padding: [4, 9],
+            formatter: `黎明 ${fmtTime(dawnMs)}`
           },
-          data: [[duskMs, 0]], z: 4
+          data: [[dawnMs, 0]]
+        },
+        {
+          type: 'scatter', symbolSize: 7, silent: true, z: 5,
+          itemStyle: { color: 'rgba(196,181,253,0.95)', shadowBlur: 6, shadowColor: '#c4b5fd' },
+          label: {
+            show: true, position: 'bottom', distance: 14,
+            color: '#111827', fontSize: 14, fontWeight: 600,
+            fontFamily: '"Newsreader", "Segoe UI", system-ui, sans-serif',
+            backgroundColor: 'rgba(241,232,255,0.95)',
+            borderColor: 'rgba(124,58,237,0.5)',
+            borderWidth: 1, borderRadius: 6,
+            padding: [4, 9],
+            formatter: `黄昏 ${fmtTime(duskMs)}`
+          },
+          data: [[duskMs, 0]]
         },
         // ---- Study segments with their own dark contrast strip ----
         {
