@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	cloud.google.com/go/firestore v1.21.0
 	cloud.google.com/go/storage v1.62.1
+	github.com/kixorz/suncalc v1.0.0
 	golang.org/x/oauth2 v0.36.0
 	google.golang.org/api v0.276.0
 )

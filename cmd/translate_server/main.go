@@ -156,6 +156,11 @@ func main() {
 	http.HandleFunc("/session/record", sessionRecordHandler())
 	http.HandleFunc("/session/list", sessionListHandler())
 	http.HandleFunc("/session/csv", sessionCSVHandler())
+	http.HandleFunc("/studytime/segment", studyTimeSegmentHandler())
+	http.HandleFunc("/studytime/today", studyTimeTodayHandler())
+	http.HandleFunc("/stats/inc", statsIncHandler())
+	http.HandleFunc("/stats/today", statsTodayHandler())
+	http.HandleFunc("/sun/today", sunTodayHandler())
 	http.HandleFunc("/dictation/tts", dictationTTSHandler(ttsKey))
 	http.HandleFunc("/trace/record", traceRecordHandler())
 	http.HandleFunc("/trace/list", traceListHandler())
@@ -168,6 +173,7 @@ func main() {
 	http.HandleFunc("/gmail/callback", gmailCallbackHandler())
 	http.HandleFunc("/gmail/status", gmailStatusHandler())
 	http.HandleFunc("/email/send", emailSendHandler(geminiKey, geminiModel))
+	http.HandleFunc("/email/reminder", emailReminderHandler())
 
 	addr := os.Getenv("LISTEN_ADDR")
 	if addr == "" {

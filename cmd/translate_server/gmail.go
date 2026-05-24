@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -175,9 +176,37 @@ func buildDailyReport(geminiKey, geminiModel string) (string, error) {
 		}
 	}
 
+	// Study time today
+	studyDay := loadStudyDay(today)
+	studyTotalMs := totalStudyMs(studyDay)
+	studyMinutes := int(studyTotalMs / 60000)
+
 	// Build report content
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("📅 %s 学习日报\n\n", today))
+
+	if studyTotalMs > 0 {
+		hours := studyMinutes / 60
+		mins := studyMinutes % 60
+		if hours > 0 {
+			sb.WriteString(fmt.Sprintf("⏱  在线学习时长: %d 小时 %d 分钟（共 %d 段）\n", hours, mins, len(studyDay.Segments)))
+		} else {
+			sb.WriteString(fmt.Sprintf("⏱  在线学习时长: %d 分钟（共 %d 段）\n", mins, len(studyDay.Segments)))
+		}
+		// First-last bracket
+		if len(studyDay.Segments) > 0 {
+			sort.Slice(studyDay.Segments, func(i, j int) bool {
+				return studyDay.Segments[i].Start < studyDay.Segments[j].Start
+			})
+			first := studyDay.Segments[0].Start
+			last := studyDay.Segments[len(studyDay.Segments)-1].End
+			sb.WriteString(fmt.Sprintf("   首次活跃 %s · 最后活跃 %s\n\n",
+				time.UnixMilli(first).In(loc).Format("15:04"),
+				time.UnixMilli(last).In(loc).Format("15:04")))
+		} else {
+			sb.WriteString("\n")
+		}
+	}
 
 	if len(todayTraces) > 0 {
 		totalWords := 0
@@ -220,6 +249,137 @@ func buildDailyReport(geminiKey, geminiModel string) (string, error) {
 	return sb.String(), nil
 }
 
+// sendGmailMessage sends a plain-text UTF-8 email via the Gmail API using
+// the locally stored OAuth token. Returns an error if the user has not yet
+// authorized Gmail (visit /gmail/auth) or if the API call fails.
+func sendGmailMessage(to, subject, body string) error {
+	cfg, err := loadGmailOAuth2Config()
+	if err != nil {
+		return fmt.Errorf("oauth config: %w", err)
+	}
+	tok, err := loadSavedToken()
+	if err != nil {
+		return fmt.Errorf("not authorized: %w", err)
+	}
+	tokenSource := cfg.TokenSource(context.Background(), tok)
+	newTok, err := tokenSource.Token()
+	if err != nil {
+		return fmt.Errorf("token refresh: %w", err)
+	}
+	if newTok.AccessToken != tok.AccessToken {
+		saveToken(newTok)
+	}
+
+	msgStr := fmt.Sprintf(
+		"To: %s\r\nSubject: =?utf-8?B?%s?=\r\nContent-Type: text/plain; charset=\"UTF-8\"\r\n\r\n%s",
+		to,
+		base64.StdEncoding.EncodeToString([]byte(subject)),
+		body,
+	)
+	raw := base64.URLEncoding.EncodeToString([]byte(msgStr))
+
+	reqBody, _ := json.Marshal(map[string]string{"raw": raw})
+	httpReq, _ := http.NewRequest("POST",
+		"https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+		bytes.NewReader(reqBody))
+	httpReq.Header.Set("Authorization", "Bearer "+newTok.AccessToken)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("gmail send: %w", err)
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("gmail api %d: %s", resp.StatusCode, string(respBody))
+	}
+	return nil
+}
+
+// POST /email/reminder (body ignored)
+// Builds and sends a "get back to studying" nag email to the recipient
+// configured via the REMINDER_EMAIL env var (single-user app).
+func emailReminderHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeCORSHeaders(w)
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		to := strings.TrimSpace(os.Getenv("REMINDER_EMAIL"))
+		if to == "" {
+			http.Error(w, "REMINDER_EMAIL not configured", http.StatusInternalServerError)
+			return
+		}
+		// Drain the body so the client doesn't choke on a half-read request.
+		io.Copy(io.Discard, r.Body)
+		req := struct{ To string }{To: to}
+
+		loc := time.FixedZone("UTC+8", 8*60*60)
+		date := utc8Date(time.Now())
+		sd := loadStudyDay(date)
+		s := loadStats(date)
+
+		totalMs := totalStudyMs(sd)
+		totalMin := int(totalMs / 60000)
+		hours := totalMin / 60
+		mins := totalMin % 60
+
+		var lastSeg StudySegment
+		if len(sd.Segments) > 0 {
+			sort.Slice(sd.Segments, func(i, j int) bool {
+				return sd.Segments[i].Start < sd.Segments[j].Start
+			})
+			lastSeg = sd.Segments[len(sd.Segments)-1]
+		}
+
+		cleaned := countCleanedWordsToday(date)
+
+		var sb strings.Builder
+		sb.WriteString("⏰ 嘿，你已经走神 10 分钟啦！快回来学习 🚀\n\n")
+		sb.WriteString(fmt.Sprintf("📅 %s\n\n", date))
+
+		if hours > 0 {
+			sb.WriteString(fmt.Sprintf("⏱ 今日累计：%d 小时 %d 分钟\n", hours, mins))
+		} else {
+			sb.WriteString(fmt.Sprintf("⏱ 今日累计：%d 分钟\n", mins))
+		}
+
+		if lastSeg.End > lastSeg.Start {
+			lastMin := int((lastSeg.End - lastSeg.Start) / 60000)
+			sb.WriteString(fmt.Sprintf("🔥 上一段：%s - %s（%d 分钟）\n",
+				time.UnixMilli(lastSeg.Start).In(loc).Format("15:04"),
+				time.UnixMilli(lastSeg.End).In(loc).Format("15:04"),
+				lastMin,
+			))
+		}
+
+		sb.WriteString("\n📈 今日干了啥：\n")
+		sb.WriteString(fmt.Sprintf("   · 🧹 学会单词 %d 个\n", cleaned))
+		sb.WriteString(fmt.Sprintf("   · 🔊 听音频 %d 次\n", s.TTSPlays))
+		sb.WriteString(fmt.Sprintf("   · ✍️  听写 %d 个单词（共输入 %d 次）\n", s.DictWords, s.DictInputs))
+		sb.WriteString(fmt.Sprintf("   · 👁️  认词 %d 个\n", s.RecogWords))
+		sb.WriteString("\n别再摸鱼了！赶紧回来背单词 🎯")
+
+		subject := fmt.Sprintf("⏰ 别摸鱼啦！回来学英语 — %s", date)
+		if err := sendGmailMessage(req.To, subject, sb.String()); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		appendActivityLog("reminder", fmt.Sprintf("发送摸鱼提醒到 %s", req.To), nil)
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "sent", "to": req.To})
+	}
+}
+
 // POST /email/send → send today's daily report via Gmail
 func emailSendHandler(geminiKey, geminiModel string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -235,28 +395,6 @@ func emailSendHandler(geminiKey, geminiModel string) http.HandlerFunc {
 			return
 		}
 
-		cfg, err := loadGmailOAuth2Config()
-		if err != nil {
-			http.Error(w, "OAuth config: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		tok, err := loadSavedToken()
-		if err != nil {
-			http.Error(w, "未授权 Gmail，请先访问 /gmail/auth", http.StatusUnauthorized)
-			return
-		}
-
-		// Refresh token if needed
-		tokenSource := cfg.TokenSource(context.Background(), tok)
-		newTok, err := tokenSource.Token()
-		if err != nil {
-			http.Error(w, "token refresh failed: "+err.Error(), http.StatusUnauthorized)
-			return
-		}
-		if newTok.AccessToken != tok.AccessToken {
-			saveToken(newTok)
-		}
-
 		report, err := buildDailyReport(geminiKey, geminiModel)
 		if err != nil {
 			http.Error(w, "build report: "+err.Error(), http.StatusInternalServerError)
@@ -267,32 +405,8 @@ func emailSendHandler(geminiKey, geminiModel string) http.HandlerFunc {
 		today := time.Now().In(loc).Format("2006-01-02")
 		subject := fmt.Sprintf("📚 英语学习日报 — %s", today)
 
-		// Build RFC 2822 email
-		msgStr := fmt.Sprintf("To: %s\r\nSubject: =?utf-8?B?%s?=\r\nContent-Type: text/plain; charset=\"UTF-8\"\r\n\r\n%s",
-			req.To,
-			base64.StdEncoding.EncodeToString([]byte(subject)),
-			report,
-		)
-		raw := base64.URLEncoding.EncodeToString([]byte(msgStr))
-
-		// Send via Gmail API
-		sendURL := "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
-		body, _ := json.Marshal(map[string]string{"raw": raw})
-		httpReq, _ := http.NewRequest("POST", sendURL, bytes.NewReader(body))
-		httpReq.Header.Set("Authorization", "Bearer "+newTok.AccessToken)
-		httpReq.Header.Set("Content-Type", "application/json")
-
-		gmailClient := &http.Client{Timeout: 30 * time.Second}
-		resp, err := gmailClient.Do(httpReq)
-		if err != nil {
-			http.Error(w, "send failed: "+err.Error(), http.StatusBadGateway)
-			return
-		}
-		defer resp.Body.Close()
-		respBody, _ := io.ReadAll(resp.Body)
-
-		if resp.StatusCode != 200 {
-			http.Error(w, "Gmail API error: "+string(respBody), resp.StatusCode)
+		if err := sendGmailMessage(req.To, subject, report); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
