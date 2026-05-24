@@ -712,12 +712,14 @@ const dictCloseBtn = $('dict-close-btn');
 const tabFiles = $('tab-files');
 const tabDictStrict = $('tab-dict-strict');
 const tabRecog = $('tab-recog');
+const tabLoop = $('tab-loop');
 const tabTraces = $('tab-traces');
 const tabCleaner = $('tab-cleaner');
 const tabActivity = $('tab-activity');
 const sidebarFiles = $('sidebar-files');
 const sidebarDictInfo = $('sidebar-dict-info');
 const sidebarRecogInfo = $('sidebar-recog-info');
+const sidebarLoop = $('sidebar-loop');
 const sidebarTraces = $('sidebar-traces');
 const sidebarCleaner = $('sidebar-cleaner');
 const sidebarActivity = $('sidebar-activity');
@@ -737,10 +739,12 @@ let dictState = {
   isFirstTry: true,
   dayName: '',
   attempts: [],
+  allWords: [],
+  baseDayName: '',
 };
 
 function setActiveTab(tab) {
-  [tabFiles, tabDictStrict, tabRecog, tabTraces, tabCleaner, tabActivity].forEach(t => t.classList.remove('active'));
+  [tabFiles, tabDictStrict, tabRecog, tabLoop, tabTraces, tabCleaner, tabActivity].forEach(t => t.classList.remove('active'));
   if (tab) tab.classList.add('active');
 }
 
@@ -748,6 +752,7 @@ function showSidebarContent(which) {
   sidebarFiles.classList.toggle('hidden', which !== 'files');
   sidebarDictInfo.classList.toggle('hidden', which !== 'dict');
   sidebarRecogInfo.classList.toggle('hidden', which !== 'recog');
+  sidebarLoop.classList.toggle('hidden', which !== 'loop');
   sidebarTraces.classList.toggle('hidden', which !== 'traces');
   sidebarCleaner.classList.toggle('hidden', which !== 'cleaner');
   sidebarActivity.classList.toggle('hidden', which !== 'activity');
@@ -779,6 +784,11 @@ tabFiles.addEventListener('click', () => {
 
 tabDictStrict.addEventListener('click', () => openDictation());
 tabRecog.addEventListener('click', () => openRecognition());
+tabLoop.addEventListener('click', () => {
+  setActiveTab(tabLoop);
+  showSidebarContent('loop');
+  dictPanel.classList.remove('visible');
+});
 tabTraces.addEventListener('click', () => {
   setActiveTab(tabTraces);
   showSidebarContent('traces');
@@ -927,6 +937,8 @@ let recogState = {
   knownWords: [],
   unknownWords: [],
   dayName: '',
+  allWords: [],
+  baseDayName: '',
 };
 
 recogCloseBtn.addEventListener('click', () => {
@@ -1069,7 +1081,11 @@ function showCustomPathScreen(bodyEl, onBack, onLoaded) {
   bodyEl.querySelector('#custom-path-back').addEventListener('click', onBack);
 
   async function go() {
-    const path = input.value.trim();
+    let path = input.value.trim();
+    // Mac Finder sometimes wraps copied paths in single quotes — strip them
+    if (path.startsWith("'") && path.endsWith("'") && path.length >= 2) {
+      path = path.slice(1, -1).trim();
+    }
     if (!path) {
       loadMsg.textContent = '❌ 请粘贴 CSV 文件路径';
       return;
@@ -1185,14 +1201,14 @@ function recogShowPortionPicker(allWords, dayName) {
     const p = portions[i];
     grid.children[i].addEventListener('click', () => {
       const slice = allWords.slice(p.range[0], p.range[1]);
-      recogStartSession(slice, `${dayName} · ${p.label}`);
+      recogStartSession(slice, `${dayName} · ${p.label}`, allWords, dayName);
     });
   }
   $('recog-back-btn').addEventListener('click', recogShowSetup);
 }
 
 // ---- Recognition Start Session ----
-function recogStartSession(words, dayName) {
+function recogStartSession(words, dayName, allWords, baseDayName) {
   if (!words || !words.length) {
     flash('该文件中没有找到单词', true);
     recogShowSetup();
@@ -1212,6 +1228,8 @@ function recogStartSession(words, dayName) {
     knownWords: [],
     unknownWords: [],
     dayName,
+    allWords: allWords || words,
+    baseDayName: baseDayName || dayName,
   };
 
   $('recog-title').textContent = `认词 · ${dayName}`;
@@ -1365,13 +1383,13 @@ function recogShowSummary() {
     }
   }
 
+  // CSV buttons: row 1 = download, row 2 = copy to clipboard
   let csvBtns = '<div class="dict-csv-row">';
-  if (s.knownWords.length > 0) {
-    csvBtns += `<button class="dict-csv-btn" id="recog-dl-known">⬇ 认识的 CSV</button>`;
-  }
-  if (s.unknownWords.length > 0) {
-    csvBtns += `<button class="dict-csv-btn" id="recog-dl-unknown">⬇ 不认识的 CSV</button>`;
-  }
+  if (s.knownWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="recog-dl-known">⬇ 认识的 CSV</button>`;
+  if (s.unknownWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="recog-dl-unknown">⬇ 不认识的 CSV</button>`;
+  csvBtns += '</div><div class="dict-csv-row">';
+  if (s.knownWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="recog-cp-known">📋 复制认识的</button>`;
+  if (s.unknownWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="recog-cp-unknown">📋 复制不认识的</button>`;
   csvBtns += '</div>';
 
   recogBody.innerHTML = `
@@ -1388,19 +1406,28 @@ function recogShowSummary() {
   </div>
   ${csvBtns}
   <div class="recog-summary-actions">
-    <button class="dict-start-btn" id="recog-home">⌂ 回主页</button>
     <button class="dict-start-btn" id="recog-redo">↻ 重新本课</button>
+    <button class="dict-start-btn" id="recog-repick">✂ 换段落</button>
+    <button class="dict-back-btn"  id="recog-home">⌂ 回主页</button>
   </div>
 </div>
   `;
 
-  const dlKnown = $('recog-dl-known');
+  const dlKnown   = $('recog-dl-known');
   const dlUnknown = $('recog-dl-unknown');
-  if (dlKnown) dlKnown.addEventListener('click', () => dictDownloadCSV(s.knownWords, `${s.dayName}_known.csv`));
+  const cpKnown   = $('recog-cp-known');
+  const cpUnknown = $('recog-cp-unknown');
+  if (dlKnown)   dlKnown.addEventListener('click', () => dictDownloadCSV(s.knownWords, `${s.dayName}_known.csv`));
   if (dlUnknown) dlUnknown.addEventListener('click', () => dictDownloadCSV(s.unknownWords, `${s.dayName}_unknown.csv`));
+  if (cpKnown)   cpKnown.addEventListener('click', () => dictCopyCSV(s.knownWords, '认识的单词'));
+  if (cpUnknown) cpUnknown.addEventListener('click', () => dictCopyCSV(s.unknownWords, '不认识的单词'));
 
+  $('recog-redo').addEventListener('click', () => recogStartSession(s.words, s.dayName, s.allWords, s.baseDayName));
+  $('recog-repick').addEventListener('click', () => {
+    if (s.allWords && s.allWords.length) recogShowPortionPicker(s.allWords, s.baseDayName || s.dayName);
+    else recogShowSetup();
+  });
   $('recog-home').addEventListener('click', recogReset);
-  $('recog-redo').addEventListener('click', () => recogStartSession(s.words, s.dayName));
   $('recog-title').textContent = '认词模式';
 
   saveSession({
@@ -1414,7 +1441,7 @@ function recogShowSummary() {
 }
 
 function recogReset() {
-  recogState = { words: [], shuffled: [], currentIdx: 0, knownWords: [], unknownWords: [], dayName: '' };
+  recogState = { words: [], shuffled: [], currentIdx: 0, knownWords: [], unknownWords: [], dayName: '', allWords: [], baseDayName: '' };
   $('recog-title').textContent = '认词模式';
   recogShowSetup();
 }
@@ -1584,14 +1611,14 @@ function dictShowPortionPicker(allWords, dayName) {
     const p = portions[i];
     grid.children[i].addEventListener('click', () => {
       const slice = allWords.slice(p.range[0], p.range[1]);
-      dictStartSession(slice, `${dayName} · ${p.label}`);
+      dictStartSession(slice, `${dayName} · ${p.label}`, allWords, dayName);
     });
   }
   $('dict-back-btn').addEventListener('click', dictShowSetup);
 }
 
 // ---- Start Session ----
-function dictStartSession(words, dayName) {
+function dictStartSession(words, dayName, allWords, baseDayName) {
   if (!words || !words.length) {
     flash('该文件中没有找到单词', true);
     dictShowSetup();
@@ -1615,6 +1642,8 @@ function dictStartSession(words, dayName) {
     isFirstTry: true,
     dayName: dayName,
     attempts: [],
+    allWords: allWords || words,
+    baseDayName: baseDayName || dayName,
   };
 
   $('dict-title').textContent = `听写 · ${dayName}`;
@@ -1879,6 +1908,15 @@ function dictDownloadCSV(words, filename) {
   URL.revokeObjectURL(url);
 }
 
+async function dictCopyCSV(words, label) {
+  try {
+    await navigator.clipboard.writeText(dictWordsToCSV(words));
+    flash(`已复制 ${label}（${words.length} 词）到剪贴板`);
+  } catch (err) {
+    flash('复制失败: ' + err.message, true);
+  }
+}
+
 // ---- Summary Screen ----
 function dictShowSummary() {
   const s = dictState;
@@ -1928,14 +1966,13 @@ function dictShowSummary() {
     ? '<div style="text-align:center;margin:8px 0;font-size:1em;color:#4ade80">🎉 完美通关！没有任何错题！</div>'
     : '';
 
-  // CSV download buttons
+  // CSV buttons: row 1 = download, row 2 = copy to clipboard
   let csvBtns = '<div class="dict-csv-row">';
-  if (s.correctWords.length > 0) {
-    csvBtns += `<button class="dict-csv-btn" id="dict-dl-correct">⬇ 正确单词 CSV</button>`;
-  }
-  if (s.incorrectWords.length > 0) {
-    csvBtns += `<button class="dict-csv-btn" id="dict-dl-incorrect">⬇ 错误单词 CSV</button>`;
-  }
+  if (s.correctWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="dict-dl-correct">⬇ 正确单词 CSV</button>`;
+  if (s.incorrectWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="dict-dl-incorrect">⬇ 错误单词 CSV</button>`;
+  csvBtns += '</div><div class="dict-csv-row">';
+  if (s.correctWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="dict-cp-correct">📋 复制正确单词</button>`;
+  if (s.incorrectWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="dict-cp-incorrect">📋 复制错误单词</button>`;
   csvBtns += '</div>';
 
   dictBody.innerHTML = `
@@ -1961,27 +1998,29 @@ function dictShowSummary() {
     ${correctHTML}
   </div>
   ${csvBtns}
-  <div style="text-align:center;margin-top:12px">
-    <button class="dict-start-btn" id="dict-retry">再来一次</button>
+  <div class="recog-summary-actions">
+    <button class="dict-start-btn" id="dict-retry">↻ 重新本课</button>
+    <button class="dict-start-btn" id="dict-repick">✂ 换段落</button>
+    <button class="dict-back-btn"  id="dict-home">⌂ 回主页</button>
   </div>
 </div>
   `;
 
-  // Bind CSV download buttons
   const dlCorrect = $('dict-dl-correct');
   const dlIncorrect = $('dict-dl-incorrect');
-  if (dlCorrect) {
-    dlCorrect.addEventListener('click', () => {
-      dictDownloadCSV(s.correctWords, `${s.dayName}_correct.csv`);
-    });
-  }
-  if (dlIncorrect) {
-    dlIncorrect.addEventListener('click', () => {
-      dictDownloadCSV(s.incorrectWords, `${s.dayName}_incorrect.csv`);
-    });
-  }
+  const cpCorrect = $('dict-cp-correct');
+  const cpIncorrect = $('dict-cp-incorrect');
+  if (dlCorrect)   dlCorrect.addEventListener('click', () => dictDownloadCSV(s.correctWords, `${s.dayName}_correct.csv`));
+  if (dlIncorrect) dlIncorrect.addEventListener('click', () => dictDownloadCSV(s.incorrectWords, `${s.dayName}_incorrect.csv`));
+  if (cpCorrect)   cpCorrect.addEventListener('click', () => dictCopyCSV(s.correctWords, '正确单词'));
+  if (cpIncorrect) cpIncorrect.addEventListener('click', () => dictCopyCSV(s.incorrectWords, '错误单词'));
 
-  $('dict-retry').addEventListener('click', dictReset);
+  $('dict-retry').addEventListener('click', () => dictStartSession(s.words, s.dayName, s.allWords, s.baseDayName));
+  $('dict-repick').addEventListener('click', () => {
+    if (s.allWords && s.allWords.length) dictShowPortionPicker(s.allWords, s.baseDayName || s.dayName);
+    else dictShowSetup();
+  });
+  $('dict-home').addEventListener('click', dictReset);
   $('dict-title').textContent = '听写模式';
 }
 
@@ -1996,6 +2035,8 @@ function dictReset() {
     isFirstTry: true,
     dayName: '',
     attempts: [],
+    allWords: [],
+    baseDayName: '',
   };
   $('dict-title').textContent = '听写模式';
   dictShowSetup();
@@ -2388,6 +2429,7 @@ scalePanel(popup, 420, 16);
   let idleTimer = null;
   let heartbeatTimer = null;
   let lastFire = 0;
+  let paused = false;
 
   function postSegment(start, end, useBeacon) {
     if (!start || !end || end <= start) return;
@@ -2419,7 +2461,9 @@ scalePanel(popup, 420, 16);
   function stopSession(useBeacon) {
     if (!activeStart || !lastActivity) return;
     const start = activeStart;
-    const end = lastActivity;
+    // Extend segment to cover the full idle window — any activity within 1 min
+    // counts as continuous studying, so the idle cooldown is part of study time.
+    const end = Math.min(lastActivity + IDLE_MS, Date.now());
     activeStart = null;
     lastActivity = null;
     if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
@@ -2428,6 +2472,7 @@ scalePanel(popup, 420, 16);
   }
 
   function onActivity() {
+    if (paused) return;
     const now = Date.now();
     if (now - lastFire < THROTTLE_MS) return;
     lastFire = now;
@@ -2448,6 +2493,11 @@ scalePanel(popup, 420, 16);
   window.addEventListener('beforeunload', () => stopSession(true));
   window.addEventListener('pagehide',     () => stopSession(true));
 
+  window.lexicaStudyTracker = {
+    pause() { paused = true; stopSession(false); },
+    resume() { paused = false; onActivity(); },
+  };
+
   // Kick off immediately — loading the page counts as activity
   onActivity();
 })();
@@ -2464,20 +2514,35 @@ scalePanel(popup, 420, 16);
   let fired = false;
   let lastFire = 0;
 
-  // Public API for the bell + settings UI. Recipient is configured
-  // server-side via REMINDER_EMAIL, so the frontend only owns the toggle.
+  // Migrate old 'reminder-enabled' boolean key to new 'reminder-state'
+  if (!localStorage.getItem('reminder-state') && localStorage.getItem('reminder-enabled') === 'false') {
+    localStorage.setItem('reminder-state', 'resting');
+  }
+
+  // Public API for the bell + settings UI.
+  // State: 'enabled' (on + timer), 'resting' (off + timer paused), 'elsewhere' (off + timer running)
   window.lexicaReminder = {
-    isEnabled: () => localStorage.getItem('reminder-enabled') !== 'false',
-    setEnabled(v) {
-      localStorage.setItem('reminder-enabled', v ? 'true' : 'false');
-      if (v) schedule(); else cancel();
+    getState: () => localStorage.getItem('reminder-state') || 'enabled',
+    isEnabled() { return this.getState() === 'enabled'; },
+    setState(state) {
+      localStorage.setItem('reminder-state', state);
+      if (state === 'enabled') {
+        schedule();
+        window.lexicaStudyTracker?.resume();
+      } else if (state === 'resting') {
+        cancel();
+        window.lexicaStudyTracker?.pause();
+      } else {
+        cancel(); // elsewhere: stop reminders, keep timer running
+      }
       window.dispatchEvent(new CustomEvent('lexica:reminder-changed'));
     },
+    setEnabled(v) { this.setState(v ? 'enabled' : 'resting'); },
   };
 
   function schedule() {
     cancel();
-    if (!window.lexicaReminder.isEnabled()) return;
+    if (!window.lexicaReminder?.isEnabled()) return;
     fired = false;
     timer = setTimeout(trigger, IDLE_REMINDER_MS);
   }
@@ -2486,7 +2551,7 @@ scalePanel(popup, 420, 16);
   }
   function trigger() {
     if (fired) return;
-    if (!window.lexicaReminder.isEnabled()) return;
+    if (!window.lexicaReminder?.isEnabled()) return;
     fired = true;
     try {
       fetch(`${apiBase()}/email/reminder`, {
@@ -2524,18 +2589,63 @@ scalePanel(popup, 420, 16);
   const bell = document.createElement('button');
   bell.id = 'reminder-bell-btn';
   bell.className = 'reminder-bell-btn';
+
   function updateBell() {
-    const enabled = window.lexicaReminder.isEnabled();
-    bell.innerHTML = enabled ? '🔔' : '🔕';
-    bell.title = enabled
-      ? '摸鱼提醒：开启（10 分钟没动作就发邮件，点击关闭）'
-      : '摸鱼提醒：关闭（点击开启）';
-    bell.classList.toggle('off', !enabled);
+    const state = window.lexicaReminder.getState();
+    if (state === 'enabled') {
+      bell.innerHTML = '🔔';
+      bell.title = '摸鱼提醒开启中 · 点击暂停';
+      bell.classList.remove('off');
+    } else if (state === 'resting') {
+      bell.innerHTML = '🔕';
+      bell.title = '休息中，不计时 · 点击恢复';
+      bell.classList.add('off');
+    } else {
+      bell.innerHTML = '🔕';
+      bell.title = '在别处学习，计时中 · 点击恢复';
+      bell.classList.add('off');
+    }
   }
-  bell.addEventListener('click', () => {
-    window.lexicaReminder.setEnabled(!window.lexicaReminder.isEnabled());
+
+  let bellDropdown = null;
+
+  function closeBellDropdown() {
+    if (bellDropdown) { bellDropdown.remove(); bellDropdown = null; }
+  }
+
+  bell.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const state = window.lexicaReminder.getState();
+    if (state !== 'enabled') {
+      closeBellDropdown();
+      window.lexicaReminder.setState('enabled');
+      return;
+    }
+    if (bellDropdown) { closeBellDropdown(); return; }
+
+    bellDropdown = document.createElement('div');
+    bellDropdown.className = 'reminder-dropdown';
+    bellDropdown.innerHTML = `
+      <button class="reminder-dropdown-opt" data-action="resting">☕ 休息了，暂停计时</button>
+      <button class="reminder-dropdown-opt" data-action="elsewhere">📚 去别处学，继续计时</button>
+    `;
+    const r = bell.getBoundingClientRect();
+    bellDropdown.style.top  = (r.bottom + 6) + 'px';
+    bellDropdown.style.right = (window.innerWidth - r.right) + 'px';
+    document.body.appendChild(bellDropdown);
+
+    bellDropdown.querySelectorAll('.reminder-dropdown-opt').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        window.lexicaReminder.setState(btn.dataset.action);
+        closeBellDropdown();
+      });
+    });
+
+    setTimeout(() => document.addEventListener('click', closeBellDropdown, { once: true }), 0);
   });
-  window.addEventListener('lexica:reminder-changed', updateBell);
+
+  window.addEventListener('lexica:reminder-changed', () => { updateBell(); closeBellDropdown(); });
   updateBell();
 
   // --- Stats clock button ---
@@ -3161,9 +3271,10 @@ scalePanel(popup, 420, 16);
     });
 
     if (rerenderTimer) clearTimeout(rerenderTimer);
-    rerenderTimer = setTimeout(paint, 60 * 1000);
+    rerenderTimer = setTimeout(load, 60 * 1000);
   }
 
   setTimeout(() => chart.resize(), 50);
   load();
 })();
+
