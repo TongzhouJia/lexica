@@ -713,6 +713,7 @@ const tabFiles = $('tab-files');
 const tabDictStrict = $('tab-dict-strict');
 const tabRecog = $('tab-recog');
 const tabLoop = $('tab-loop');
+const tabTasks = $('tab-tasks');
 const tabTraces = $('tab-traces');
 const tabCleaner = $('tab-cleaner');
 const tabActivity = $('tab-activity');
@@ -720,6 +721,7 @@ const sidebarFiles = $('sidebar-files');
 const sidebarDictInfo = $('sidebar-dict-info');
 const sidebarRecogInfo = $('sidebar-recog-info');
 const sidebarLoop = $('sidebar-loop');
+const sidebarTasks = $('sidebar-tasks');
 const sidebarTraces = $('sidebar-traces');
 const sidebarCleaner = $('sidebar-cleaner');
 const sidebarActivity = $('sidebar-activity');
@@ -744,7 +746,7 @@ let dictState = {
 };
 
 function setActiveTab(tab) {
-  [tabFiles, tabDictStrict, tabRecog, tabLoop, tabTraces, tabCleaner, tabActivity].forEach(t => t.classList.remove('active'));
+  [tabFiles, tabDictStrict, tabRecog, tabLoop, tabTasks, tabTraces, tabCleaner, tabActivity].forEach(t => t.classList.remove('active'));
   if (tab) tab.classList.add('active');
 }
 
@@ -753,6 +755,7 @@ function showSidebarContent(which) {
   sidebarDictInfo.classList.toggle('hidden', which !== 'dict');
   sidebarRecogInfo.classList.toggle('hidden', which !== 'recog');
   sidebarLoop.classList.toggle('hidden', which !== 'loop');
+  sidebarTasks.classList.toggle('hidden', which !== 'tasks');
   sidebarTraces.classList.toggle('hidden', which !== 'traces');
   sidebarCleaner.classList.toggle('hidden', which !== 'cleaner');
   sidebarActivity.classList.toggle('hidden', which !== 'activity');
@@ -788,6 +791,12 @@ tabLoop.addEventListener('click', () => {
   setActiveTab(tabLoop);
   showSidebarContent('loop');
   dictPanel.classList.remove('visible');
+});
+tabTasks.addEventListener('click', () => {
+  setActiveTab(tabTasks);
+  showSidebarContent('tasks');
+  dictPanel.classList.remove('visible');
+  refreshTasks();
 });
 tabTraces.addEventListener('click', () => {
   setActiveTab(tabTraces);
@@ -1383,10 +1392,10 @@ function recogShowSummary() {
     }
   }
 
-  // CSV buttons: row 1 = send to loop page, row 2 = copy to clipboard
+  // CSV buttons: row 1 = copy a self-contained /loop URL, row 2 = copy CSV text
   let csvBtns = '<div class="dict-csv-row">';
-  if (s.knownWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="recog-lp-known">🔁 循环认识的</button>`;
-  if (s.unknownWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="recog-lp-unknown">🔁 循环不认识的</button>`;
+  if (s.knownWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="recog-lp-known">🔗 循环链接·认识</button>`;
+  if (s.unknownWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="recog-lp-unknown">🔗 循环链接·不认识</button>`;
   csvBtns += '</div><div class="dict-csv-row">';
   if (s.knownWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="recog-cp-known">📋 复制认识的</button>`;
   if (s.unknownWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="recog-cp-unknown">📋 复制不认识的</button>`;
@@ -1417,8 +1426,8 @@ function recogShowSummary() {
   const lpUnknown = $('recog-lp-unknown');
   const cpKnown   = $('recog-cp-known');
   const cpUnknown = $('recog-cp-unknown');
-  if (lpKnown)   lpKnown.addEventListener('click', () => dictSendToLoop(s.knownWords, '认识的'));
-  if (lpUnknown) lpUnknown.addEventListener('click', () => dictSendToLoop(s.unknownWords, '不认识的'));
+  if (lpKnown)   lpKnown.addEventListener('click', () => dictCopyLoopURL(s.knownWords, '认识的'));
+  if (lpUnknown) lpUnknown.addEventListener('click', () => dictCopyLoopURL(s.unknownWords, '不认识的'));
   if (cpKnown)   cpKnown.addEventListener('click', () => dictCopyCSV(s.knownWords, '认识的单词'));
   if (cpUnknown) cpUnknown.addEventListener('click', () => dictCopyCSV(s.unknownWords, '不认识的单词'));
 
@@ -1906,22 +1915,23 @@ async function dictCopyCSV(words, label) {
   }
 }
 
-// Push a word list to the /loop page (opens it in a named tab so repeated
-// sends reuse the same window). The loop page picks up new words via a
-// `storage` event if it's already open.
-function dictSendToLoop(words, label) {
+// Build a self-contained /loop URL with the CSV embedded in the hash and
+// copy it to the clipboard. Paste it into any browser — the loop page reads
+// the words straight from the URL, no server or localStorage needed.
+async function dictCopyLoopURL(words, label) {
   if (!words || !words.length) {
     flash('没有可循环的单词', true);
     return;
   }
+  let csv = dictWordsToCSV(words);
+  if (csv.charCodeAt(0) === 0xFEFF) csv = csv.slice(1); // drop BOM for a cleaner URL
+  const url = `${apiBase()}/loop#csv=${encodeURIComponent(csv)}`;
   try {
-    localStorage.setItem('loop.words', JSON.stringify(words));
+    await navigator.clipboard.writeText(url);
+    flash(`已复制${label}循环链接（${words.length} 词），换浏览器粘贴即可`);
   } catch (err) {
-    flash('保存失败: ' + err.message, true);
-    return;
+    flash('复制失败: ' + err.message, true);
   }
-  window.open('/loop', 'lexica-loop');
-  flash(`已发送 ${label}（${words.length} 词）到循环页`);
 }
 
 // ---- Summary Screen ----
@@ -1973,10 +1983,10 @@ function dictShowSummary() {
     ? '<div style="text-align:center;margin:8px 0;font-size:1em;color:#4ade80">🎉 完美通关！没有任何错题！</div>'
     : '';
 
-  // CSV buttons: row 1 = send to loop page, row 2 = copy to clipboard
+  // CSV buttons: row 1 = copy a self-contained /loop URL, row 2 = copy CSV text
   let csvBtns = '<div class="dict-csv-row">';
-  if (s.correctWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="dict-lp-correct">🔁 循环正确单词</button>`;
-  if (s.incorrectWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="dict-lp-incorrect">🔁 循环错误单词</button>`;
+  if (s.correctWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="dict-lp-correct">🔗 循环链接·正确</button>`;
+  if (s.incorrectWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="dict-lp-incorrect">🔗 循环链接·错误</button>`;
   csvBtns += '</div><div class="dict-csv-row">';
   if (s.correctWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="dict-cp-correct">📋 复制正确单词</button>`;
   if (s.incorrectWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="dict-cp-incorrect">📋 复制错误单词</button>`;
@@ -2017,8 +2027,8 @@ function dictShowSummary() {
   const lpIncorrect = $('dict-lp-incorrect');
   const cpCorrect = $('dict-cp-correct');
   const cpIncorrect = $('dict-cp-incorrect');
-  if (lpCorrect)   lpCorrect.addEventListener('click', () => dictSendToLoop(s.correctWords, '正确单词'));
-  if (lpIncorrect) lpIncorrect.addEventListener('click', () => dictSendToLoop(s.incorrectWords, '错误单词'));
+  if (lpCorrect)   lpCorrect.addEventListener('click', () => dictCopyLoopURL(s.correctWords, '正确单词'));
+  if (lpIncorrect) lpIncorrect.addEventListener('click', () => dictCopyLoopURL(s.incorrectWords, '错误单词'));
   if (cpCorrect)   cpCorrect.addEventListener('click', () => dictCopyCSV(s.correctWords, '正确单词'));
   if (cpIncorrect) cpIncorrect.addEventListener('click', () => dictCopyCSV(s.incorrectWords, '错误单词'));
 
@@ -3284,4 +3294,182 @@ scalePanel(popup, 420, 16);
   setTimeout(() => chart.resize(), 50);
   load();
 })();
+
+
+// ========================================================
+//  Google Tasks — My Tasks sidebar panel
+//  Lists / creates / completes / edits / deletes tasks in the user's
+//  default Google Tasks list ("My Tasks") via the backend OAuth proxy.
+// ========================================================
+const tasksAuthEl = $('tasks-auth');
+const tasksMainEl = $('tasks-main');
+const tasksListEl = $('tasks-list');
+const tasksStatusEl = $('tasks-status');
+const tasksNewInput = $('tasks-new-input');
+const tasksAddBtn = $('tasks-add-btn');
+const tasksRefreshBtn = $('tasks-refresh');
+
+function setTasksStatus(msg, isError) {
+  tasksStatusEl.textContent = msg || '';
+  tasksStatusEl.style.color = isError ? 'var(--accent)' : '';
+}
+
+async function refreshTasks() {
+  setTasksStatus('加载中...');
+  // First check authorization
+  let authorized = false;
+  try {
+    const res = await fetch(`${apiBase()}/tasks/status`);
+    const data = await res.json();
+    authorized = !!data.authorized;
+  } catch (_) { /* treat as unauthorized */ }
+
+  if (!authorized) {
+    tasksAuthEl.classList.remove('hidden');
+    tasksMainEl.classList.add('hidden');
+    setTasksStatus('');
+    return;
+  }
+  tasksAuthEl.classList.add('hidden');
+  tasksMainEl.classList.remove('hidden');
+
+  try {
+    const res = await fetch(`${apiBase()}/tasks/list`);
+    if (res.status === 401) {
+      tasksAuthEl.classList.remove('hidden');
+      tasksMainEl.classList.add('hidden');
+      setTasksStatus('');
+      return;
+    }
+    if (!res.ok) throw new Error((await res.text()).trim() || `HTTP ${res.status}`);
+    const data = await res.json();
+    renderTasks(data.items || []);
+  } catch (err) {
+    setTasksStatus('加载失败: ' + err.message, true);
+  }
+}
+
+function renderTasks(items) {
+  // Incomplete first, then completed; preserve API order within each group.
+  const active = items.filter(t => t.status !== 'completed');
+  const done = items.filter(t => t.status === 'completed');
+  const ordered = [...active, ...done];
+
+  setTasksStatus(active.length ? `${active.length} 个待办` : (items.length ? '全部完成 🎉' : ''));
+
+  tasksListEl.innerHTML = '';
+  if (!ordered.length) {
+    tasksListEl.innerHTML = '<div class="tasks-empty">还没有任务，上面加一个吧～</div>';
+    return;
+  }
+
+  for (const t of ordered) {
+    const item = document.createElement('div');
+    item.className = 'task-item' + (t.status === 'completed' ? ' done' : '');
+
+    const check = document.createElement('button');
+    check.className = 'task-check';
+    check.title = t.status === 'completed' ? '标记为未完成' : '标记为完成';
+    check.textContent = '✓';
+    check.addEventListener('click', () => toggleTask(t));
+
+    const body = document.createElement('div');
+    body.className = 'task-body';
+    body.title = '点击编辑';
+    const title = document.createElement('div');
+    title.className = 'task-title';
+    title.textContent = t.title || '(无标题)';
+    body.appendChild(title);
+    if (t.notes) {
+      const notes = document.createElement('div');
+      notes.className = 'task-notes';
+      notes.textContent = t.notes;
+      body.appendChild(notes);
+    }
+    body.addEventListener('click', () => editTask(t));
+
+    const del = document.createElement('button');
+    del.className = 'task-del';
+    del.title = '删除';
+    del.textContent = '×';
+    del.addEventListener('click', (e) => { e.stopPropagation(); deleteTask(t); });
+
+    item.append(check, body, del);
+    tasksListEl.appendChild(item);
+  }
+}
+
+async function addTask() {
+  const title = tasksNewInput.value.trim();
+  if (!title) return;
+  tasksAddBtn.disabled = true;
+  try {
+    const res = await fetch(`${apiBase()}/tasks/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title }),
+    });
+    if (!res.ok) throw new Error((await res.text()).trim() || `HTTP ${res.status}`);
+    tasksNewInput.value = '';
+    await refreshTasks();
+  } catch (err) {
+    flash('添加失败: ' + err.message, true);
+  } finally {
+    tasksAddBtn.disabled = false;
+  }
+}
+
+async function toggleTask(t) {
+  const next = t.status === 'completed' ? 'needsAction' : 'completed';
+  try {
+    const res = await fetch(`${apiBase()}/tasks/update`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: t.id, status: next }),
+    });
+    if (!res.ok) throw new Error((await res.text()).trim() || `HTTP ${res.status}`);
+    await refreshTasks();
+  } catch (err) {
+    flash('更新失败: ' + err.message, true);
+  }
+}
+
+async function editTask(t) {
+  const next = prompt('编辑任务：', t.title || '');
+  if (next == null) return;
+  const trimmed = next.trim();
+  if (!trimmed || trimmed === t.title) return;
+  try {
+    const res = await fetch(`${apiBase()}/tasks/update`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: t.id, title: trimmed }),
+    });
+    if (!res.ok) throw new Error((await res.text()).trim() || `HTTP ${res.status}`);
+    await refreshTasks();
+  } catch (err) {
+    flash('修改失败: ' + err.message, true);
+  }
+}
+
+async function deleteTask(t) {
+  if (!confirm(`删除任务「${t.title || t.id}」?`)) return;
+  try {
+    const res = await fetch(`${apiBase()}/tasks/delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: t.id }),
+    });
+    if (!res.ok) throw new Error((await res.text()).trim() || `HTTP ${res.status}`);
+    await refreshTasks();
+  } catch (err) {
+    flash('删除失败: ' + err.message, true);
+  }
+}
+
+tasksRefreshBtn.addEventListener('click', refreshTasks);
+tasksAddBtn.addEventListener('click', addTask);
+tasksNewInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); addTask(); }
+});
 

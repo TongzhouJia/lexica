@@ -436,21 +436,34 @@ function loadWordsAndShow(list) {
   startCycle();
 }
 
-// --- Auto-restore previous session on page load ---
-(function tryRestore() {
+// --- Load CSV straight from the URL hash (#csv=...) ---
+// Lets you paste a self-contained loop link into ANY browser — the words
+// travel in the URL, no server call or localStorage needed.
+function tryLoadFromHash() {
+  const m = (location.hash || '').match(/[#&]csv=([^&]*)/);
+  if (!m) return false;
+  try {
+    const list = parseCSV(decodeURIComponent(m[1]));
+    if (list.length) {
+      loadWordsAndShow(list);
+      try { localStorage.setItem(LS.words, JSON.stringify(list)); } catch (_) {}
+      return true;
+    }
+  } catch (_) { /* ignore */ }
+  return false;
+}
+
+// --- Init: prefer URL hash, fall back to last session in localStorage ---
+(function init() {
+  if (tryLoadFromHash()) return;
   try {
     const raw = localStorage.getItem(LS.words);
-    if (!raw) return;
-    loadWordsAndShow(JSON.parse(raw));
+    if (raw) loadWordsAndShow(JSON.parse(raw));
   } catch (_) { /* ignore */ }
 })();
 
-// --- Listen for word lists pushed from other tabs (dictation/recognition
-//     summary screens write to localStorage and open /loop) ---
-window.addEventListener('storage', (e) => {
-  if (e.key !== LS.words || !e.newValue) return;
-  try { loadWordsAndShow(JSON.parse(e.newValue)); } catch (_) { /* ignore */ }
-});
+// React if the hash changes while the page is open (e.g. paste a new link)
+window.addEventListener('hashchange', tryLoadFromHash);
 </script>
 </body>
 </html>

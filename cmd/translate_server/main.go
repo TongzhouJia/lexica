@@ -175,6 +175,13 @@ func main() {
 	http.HandleFunc("/gmail/status", gmailStatusHandler())
 	http.HandleFunc("/email/send", emailSendHandler(geminiKey, geminiModel))
 	http.HandleFunc("/email/reminder", emailReminderHandler())
+	http.HandleFunc("/tasks/auth", tasksAuthHandler())
+	http.HandleFunc("/tasks/callback", tasksCallbackHandler())
+	http.HandleFunc("/tasks/status", tasksStatusHandler())
+	http.HandleFunc("/tasks/list", tasksListHandler())
+	http.HandleFunc("/tasks/create", tasksCreateHandler())
+	http.HandleFunc("/tasks/update", tasksUpdateHandler())
+	http.HandleFunc("/tasks/delete", tasksDeleteHandler())
 
 	addr := os.Getenv("LISTEN_ADDR")
 	if addr == "" {

@@ -2747,3 +2747,155 @@ main.sun-bleed {
 
 .study-error { color: #fca5a5; }
 
+/* ========================================================
+   Google Tasks (My Tasks) sidebar panel
+   ======================================================== */
+.tasks-auth {
+  text-align: center;
+  padding: 28px 16px;
+  color: var(--ink-soft);
+  font-size: 13px;
+}
+.tasks-auth.hidden { display: none; }
+
+.tasks-auth-btn {
+  display: inline-block;
+  padding: 9px 18px;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  text-decoration: none;
+  border-radius: 6px;
+  font-size: 13px;
+  letter-spacing: 0.03em;
+  transition: all 0.15s;
+}
+.tasks-auth-btn:hover {
+  background: var(--accent);
+  color: #fff;
+}
+.tasks-auth-hint {
+  margin-top: 12px;
+  font-size: 11px;
+  color: var(--ink-soft);
+  opacity: 0.7;
+}
+
+#tasks-main.hidden { display: none; }
+
+.tasks-add-row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.tasks-new-input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--bg-elev);
+  color: var(--ink);
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.tasks-new-input:focus { border-color: var(--accent); }
+.tasks-add-btn {
+  flex: 0 0 auto;
+  width: 34px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.tasks-add-btn:hover { opacity: 0.85; }
+.tasks-add-btn:disabled { opacity: 0.4; cursor: default; }
+
+.tasks-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+}
+
+.task-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 6px;
+  border-bottom: 1px solid var(--rule);
+  line-height: 1.45;
+}
+.task-item:hover { background: rgba(255, 255, 255, 0.02); }
+
+.task-check {
+  flex: 0 0 auto;
+  width: 17px;
+  height: 17px;
+  margin-top: 1px;
+  border: 1.5px solid var(--ink-soft);
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: transparent;
+  transition: all 0.15s;
+  padding: 0;
+}
+.task-check:hover { border-color: var(--accent); }
+.task-item.done .task-check {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.task-body {
+  flex: 1;
+  min-width: 0;
+  cursor: text;
+}
+.task-title {
+  font-size: 13px;
+  color: var(--ink);
+  word-break: break-word;
+}
+.task-item.done .task-title {
+  text-decoration: line-through;
+  color: var(--ink-soft);
+}
+.task-notes {
+  font-size: 11px;
+  color: var(--ink-soft);
+  margin-top: 2px;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.task-del {
+  flex: 0 0 auto;
+  background: transparent;
+  border: none;
+  color: var(--ink-soft);
+  font-size: 15px;
+  cursor: pointer;
+  padding: 0 4px;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+}
+.task-item:hover .task-del { opacity: 0.6; }
+.task-del:hover { color: var(--accent); opacity: 1; }
+
+.tasks-empty {
+  text-align: center;
+  padding: 28px 12px;
+  color: var(--ink-soft);
+  font-size: 13px;
+}
+

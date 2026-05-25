@@ -64,6 +64,9 @@
         <button class="sidebar-tab" id="tab-loop" title="循环·副屏看词">
           <span class="tab-icon">🔁</span>循环
         </button>
+        <button class="sidebar-tab" id="tab-tasks" title="Google Tasks · My Tasks">
+          <span class="tab-icon">✅</span>任务
+        </button>
         <button class="sidebar-tab" id="tab-traces" title="练习痕迹">
           <span class="tab-icon">📊</span>练习痕迹
         </button>
@@ -119,6 +122,28 @@
           <div style="font-size:34px;margin-bottom:14px;">🔁</div>
           <div style="margin-bottom:18px;">独立页面 · 黑底白字 · 满屏切词<br>不计入学习时间</div>
           <a href="/loop" target="_blank" rel="noopener" style="display:inline-block;padding:10px 22px;border:1px solid var(--ink);color:var(--ink);text-decoration:none;border-radius:4px;font-size:13px;letter-spacing:0.05em;">打开循环页 ↗</a>
+        </div>
+      </div>
+
+      <!-- Tab: Google Tasks (My Tasks) -->
+      <div class="sidebar-content hidden" id="sidebar-tasks">
+        <div class="library-head">
+          <h2 class="library-title">My Tasks</h2>
+          <button id="tasks-refresh" class="library-refresh" title="刷新">刷新</button>
+        </div>
+        <div id="tasks-auth" class="tasks-auth hidden">
+          <div style="font-size:30px;margin-bottom:10px;">✅</div>
+          <div style="margin-bottom:14px;line-height:1.6;">需要先授权 Google Tasks<br>才能查看和管理任务</div>
+          <a href="/tasks/auth" target="_blank" rel="noopener" class="tasks-auth-btn">授权 Google Tasks ↗</a>
+          <div class="tasks-auth-hint">授权完成后点上方「刷新」</div>
+        </div>
+        <div id="tasks-main" class="hidden">
+          <div class="tasks-add-row">
+            <input type="text" id="tasks-new-input" class="tasks-new-input" placeholder="添加任务，回车确认..." autocomplete="off">
+            <button id="tasks-add-btn" class="tasks-add-btn" title="添加">＋</button>
+          </div>
+          <div id="tasks-status" class="library-status"></div>
+          <div id="tasks-list" class="tasks-list"></div>
         </div>
       </div>
 
