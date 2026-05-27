@@ -711,6 +711,7 @@ const dictCloseBtn = $('dict-close-btn');
 // Sidebar tabs
 const tabFiles = $('tab-files');
 const tabDictStrict = $('tab-dict-strict');
+const tabLearn = $('tab-learn');
 const tabRecog = $('tab-recog');
 const tabLoop = $('tab-loop');
 const tabTasks = $('tab-tasks');
@@ -719,6 +720,7 @@ const tabCleaner = $('tab-cleaner');
 const tabActivity = $('tab-activity');
 const sidebarFiles = $('sidebar-files');
 const sidebarDictInfo = $('sidebar-dict-info');
+const sidebarLearnInfo = $('sidebar-learn-info');
 const sidebarRecogInfo = $('sidebar-recog-info');
 const sidebarLoop = $('sidebar-loop');
 const sidebarTasks = $('sidebar-tasks');
@@ -746,13 +748,14 @@ let dictState = {
 };
 
 function setActiveTab(tab) {
-  [tabFiles, tabDictStrict, tabRecog, tabLoop, tabTasks, tabTraces, tabCleaner, tabActivity].forEach(t => t.classList.remove('active'));
+  [tabFiles, tabDictStrict, tabLearn, tabRecog, tabLoop, tabTasks, tabTraces, tabCleaner, tabActivity].forEach(t => t.classList.remove('active'));
   if (tab) tab.classList.add('active');
 }
 
 function showSidebarContent(which) {
   sidebarFiles.classList.toggle('hidden', which !== 'files');
   sidebarDictInfo.classList.toggle('hidden', which !== 'dict');
+  sidebarLearnInfo.classList.toggle('hidden', which !== 'learn');
   sidebarRecogInfo.classList.toggle('hidden', which !== 'recog');
   sidebarLoop.classList.toggle('hidden', which !== 'loop');
   sidebarTasks.classList.toggle('hidden', which !== 'tasks');
@@ -768,6 +771,8 @@ function openDictation() {
   sidebarDictDesc.textContent = '空回车可看答案，必须照着打一遍才能进入下一题。';
 
   dictPanel.classList.add('visible');
+  learnPanel.classList.remove('visible');
+  recogPanel.classList.remove('visible');
   if (!dictState.words.length) {
     dictShowSetup();
   }
@@ -786,6 +791,7 @@ tabFiles.addEventListener('click', () => {
 });
 
 tabDictStrict.addEventListener('click', () => openDictation());
+tabLearn.addEventListener('click', () => openLearn());
 tabRecog.addEventListener('click', () => openRecognition());
 tabLoop.addEventListener('click', () => {
   setActiveTab(tabLoop);
@@ -932,6 +938,423 @@ dictCloseBtn.addEventListener('click', () => {
 });
 
 // ========================================================
+//  Learn Module (same as Recognition, but in original order)
+// ========================================================
+const learnPanel = $('learn-panel');
+const learnHeader = $('learn-header');
+const learnBody = $('learn-body');
+const learnCloseBtn = $('learn-close-btn');
+
+let learnState = {
+  words: [],
+  ordered: [],
+  currentIdx: 0,
+  knownWords: [],
+  unknownWords: [],
+  dayName: '',
+  allWords: [],
+  baseDayName: '',
+};
+
+learnCloseBtn.addEventListener('click', () => {
+  learnPanel.classList.remove('visible');
+  setActiveTab(null);
+  showSidebarContent(null);
+});
+
+// Drag support for learn panel
+let learnDrag = null;
+
+function learnPlacePanel(left, top, width, height) {
+  const margin = 8;
+  const maxLeft = Math.max(margin, window.innerWidth - width - margin);
+  const maxTop = Math.max(margin, window.innerHeight - height - margin);
+  learnPanel.style.left = `${clamp(left, margin, maxLeft)}px`;
+  learnPanel.style.top = `${clamp(top, margin, maxTop)}px`;
+  learnPanel.style.right = 'auto';
+  learnPanel.style.bottom = 'auto';
+  learnPanel.style.transform = 'none';
+}
+
+learnHeader.addEventListener('pointerdown', (e) => {
+  if ((e.button !== undefined && e.button !== 0) || e.target.closest('button')) return;
+  const rect = learnPanel.getBoundingClientRect();
+  learnDrag = { offsetX: e.clientX - rect.left, offsetY: e.clientY - rect.top, width: rect.width, height: rect.height };
+  learnPanel.classList.add('dragging');
+  learnPanel.style.width = `${rect.width}px`;
+  learnPanel.style.height = `${rect.height}px`;
+  learnHeader.setPointerCapture(e.pointerId);
+  e.preventDefault();
+});
+
+learnHeader.addEventListener('pointermove', (e) => {
+  if (!learnDrag) return;
+  learnPlacePanel(e.clientX - learnDrag.offsetX, e.clientY - learnDrag.offsetY, learnDrag.width, learnDrag.height);
+  e.preventDefault();
+});
+
+function endLearnDrag(e) {
+  if (!learnDrag) return;
+  learnDrag = null;
+  learnPanel.classList.remove('dragging');
+  if (learnHeader.hasPointerCapture(e.pointerId)) learnHeader.releasePointerCapture(e.pointerId);
+}
+
+learnHeader.addEventListener('pointerup', endLearnDrag);
+learnHeader.addEventListener('pointercancel', endLearnDrag);
+
+function openLearn() {
+  setActiveTab(tabLearn);
+  showSidebarContent('learn');
+  learnPanel.classList.add('visible');
+  dictPanel.classList.remove('visible');
+  recogPanel.classList.remove('visible');
+  $('learn-title').textContent = '学习新词';
+  if (!learnState.words.length) {
+    learnShowSetup();
+  }
+}
+
+// ---- Learn Setup Screen ----
+function learnShowSetup() {
+  learnBody.innerHTML = `
+<div class="dict-setup">
+  <div class="dict-setup-label">学哪一天？</div>
+  <div class="dict-day-grid" id="learn-day-grid"></div>
+  <div class="setup-aux-row">
+    <button class="dict-back-btn" id="learn-custom-btn">📂 自定义路径</button>
+    <button class="dict-back-btn" id="learn-paste-csv-btn">📋 粘贴 CSV</button>
+    <button class="dict-back-btn" id="learn-history-btn">📜 历史会话</button>
+  </div>
+  <div class="dict-loading" id="learn-load-msg"></div>
+</div>
+  `;
+
+  const grid = $('learn-day-grid');
+  const loadMsg = $('learn-load-msg');
+
+  for (let i = 1; i <= 21; i++) {
+    const num = i;
+    const dayName = `day${String(num).padStart(2, '0')}`;
+    const btn = document.createElement('button');
+    btn.className = 'dict-day-btn';
+    btn.textContent = String(num);
+    btn.addEventListener('click', async () => {
+      Array.from(grid.children).forEach(b => b.disabled = true);
+      loadMsg.textContent = `正在加载 ${dayName}.txt ...`;
+      try {
+        let res = await fetch(`${apiBase()}/dictation/words?day=${encodeURIComponent(dayName)}`);
+        let label = dayName;
+        if (!res.ok) {
+          res = await fetch(`${apiBase()}/dictation/words?day=${encodeURIComponent('day' + num)}`);
+          if (!res.ok) throw new Error(`找不到 day${num} 的单词文件`);
+          label = 'day' + num;
+        }
+        const words = await res.json();
+        learnShowPortionPicker(words, label);
+      } catch (err) {
+        loadMsg.textContent = `❌ ${err.message}`;
+        Array.from(grid.children).forEach(b => b.disabled = false);
+      }
+    });
+    grid.appendChild(btn);
+  }
+
+  $('learn-custom-btn').addEventListener('click', () => {
+    showCustomPathScreen(learnBody, learnShowSetup, (words, label) => learnShowPortionPicker(words, label));
+  });
+  $('learn-paste-csv-btn').addEventListener('click', () => {
+    showPasteCSVScreen(learnBody, learnShowSetup, (words, label) => learnShowPortionPicker(words, label));
+  });
+  $('learn-history-btn').addEventListener('click', () => {
+    showSessionHistoryScreen(learnBody, (s) => s.mode === 'learn', learnShowSetup);
+  });
+}
+
+// ---- Learn Portion Picker ----
+function learnShowPortionPicker(allWords, dayName) {
+  const total = (allWords || []).length;
+  if (total === 0) {
+    flash('该文件中没有找到单词', true);
+    learnShowSetup();
+    return;
+  }
+  const q1 = Math.floor(total / 4);
+  const q2 = Math.floor(total / 2);
+  const q3 = Math.floor(3 * total / 4);
+
+  const portions = [
+    { label: '第 1/4', range: [0, q1] },
+    { label: '第 2/4', range: [q1, q2] },
+    { label: '第 3/4', range: [q2, q3] },
+    { label: '第 4/4', range: [q3, total] },
+    { label: '前 1/2', range: [0, q2] },
+    { label: '后 1/2', range: [q2, total] },
+    { label: '全部',  range: [0, total], full: true },
+  ];
+
+  let html = '';
+  for (const p of portions) {
+    const count = p.range[1] - p.range[0];
+    html += `<button class="dict-portion-btn${p.full ? ' full' : ''}">
+      <span>${p.label}</span>
+      <span class="dict-portion-count">${count} 词</span>
+    </button>`;
+  }
+
+  learnBody.innerHTML = `
+<div class="dict-setup">
+  <div class="dict-setup-label">${escapeHTML(dayName)} · 选择学习范围</div>
+  <div class="dict-portion-grid" id="learn-portion-grid">${html}</div>
+  <button class="dict-back-btn" id="learn-back-btn">← 返回选择天数</button>
+</div>
+  `;
+
+  const grid = $('learn-portion-grid');
+  for (let i = 0; i < portions.length; i++) {
+    const p = portions[i];
+    grid.children[i].addEventListener('click', () => {
+      const slice = allWords.slice(p.range[0], p.range[1]);
+      learnStartSession(slice, `${dayName} · ${p.label}`, allWords, dayName);
+    });
+  }
+  $('learn-back-btn').addEventListener('click', learnShowSetup);
+}
+
+// ---- Learn Start Session (NO SHUFFLE — original order) ----
+function learnStartSession(words, dayName, allWords, baseDayName) {
+  if (!words || !words.length) {
+    flash('该文件中没有找到单词', true);
+    learnShowSetup();
+    return;
+  }
+
+  // Keep original order — no shuffle!
+  const ordered = [...words];
+
+  learnState = {
+    words,
+    ordered,
+    currentIdx: 0,
+    knownWords: [],
+    unknownWords: [],
+    dayName,
+    allWords: allWords || words,
+    baseDayName: baseDayName || dayName,
+  };
+
+  $('learn-title').textContent = `学习 · ${dayName}`;
+  flash(`已加载 ${words.length} 个新词，按顺序学习！`);
+  preloadTTSBatch(ordered);
+  learnShowQuestion();
+}
+
+// ---- Learn Question Screen ----
+function learnShowQuestion() {
+  const s = learnState;
+  if (s.currentIdx >= s.ordered.length) {
+    learnShowSummary();
+    return;
+  }
+
+  fireStat('recog_word');
+  const word = s.ordered[s.currentIdx];
+  const total = s.ordered.length;
+  const current = s.currentIdx + 1;
+  const pct = ((current - 1) / total * 100).toFixed(1);
+
+  learnBody.innerHTML = `
+<div class="recog-question">
+  <div class="recog-progress">${current} / ${total}</div>
+  <div class="recog-progress-bar">
+    <div class="recog-progress-fill" style="width: ${pct}%"></div>
+  </div>
+  <div class="recog-english">${escapeHTML(word.english)}</div>
+  <button class="dict-play-btn recog-replay-btn" id="learn-replay-btn">🔊 重听</button>
+  <div class="recog-reveal-row" id="learn-reveal-row" style="visibility:hidden">
+    <span class="recog-chinese-reveal" id="learn-chinese">${escapeHTML(word.chinese)}</span>
+    <button class="recog-edit-btn" id="learn-edit-btn" title="修改翻译">✎</button>
+  </div>
+  <div class="recog-btn-row" id="learn-btn-row">
+    <button class="recog-no-btn" id="learn-no-btn">✗</button>
+    <button class="recog-yes-btn" id="learn-yes-btn">✓</button>
+  </div>
+  <div class="recog-hint" id="learn-hint">回车=认识 · 空格=不认识 · Esc=提前退出</div>
+  <button class="recog-exit-btn" id="learn-exit-btn">⏏ 提前退出</button>
+</div>
+  `;
+
+  dictPlayTTS(word.english);
+
+  let revealed = false;
+  let graded = false;
+  let firstKnown = null;
+
+  const revealRow = $('learn-reveal-row');
+  const btnRow = $('learn-btn-row');
+  const hintEl = $('learn-hint');
+  const replayBtn = $('learn-replay-btn');
+  const editBtn = $('learn-edit-btn');
+  const chineseEl = $('learn-chinese');
+
+  function reveal(claimedKnown) {
+    if (revealed) return;
+    revealed = true;
+    firstKnown = claimedKnown;
+    revealRow.style.visibility = '';
+    btnRow.innerHTML = `
+      <button class="recog-no-btn" id="learn-wrong-btn">✗</button>
+      <button class="recog-yes-btn" id="learn-right-btn">✓</button>
+    `;
+    $('learn-right-btn').addEventListener('click', () => grade(true));
+    $('learn-wrong-btn').addEventListener('click', () => grade(false));
+    hintEl.textContent = '回车=认对 · 空格=认错 · Esc=提前退出';
+  }
+
+  function grade(gotRight) {
+    if (!revealed || graded) return;
+    graded = true;
+    window.removeEventListener('keydown', onKey);
+    if (firstKnown && gotRight) s.knownWords.push(word);
+    else s.unknownWords.push(word);
+    s.currentIdx++;
+    learnShowQuestion();
+  }
+
+  function earlyExit() {
+    window.removeEventListener('keydown', onKey);
+    if (revealed && !graded) {
+      s.unknownWords.push(word);
+    }
+    learnShowSummary();
+  }
+
+  async function editTranslation() {
+    const current = chineseEl.textContent;
+    const next = prompt(`修改 "${word.english}" 的翻译：`, current);
+    if (next == null) return;
+    const trimmed = next.trim();
+    if (trimmed === '' || trimmed === current) return;
+    try {
+      const res = await fetch(`${apiBase()}/dictation/update-word`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ day: learnState.dayName.split(' ')[0], english: word.english, chinese: trimmed }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      word.chinese = trimmed;
+      chineseEl.textContent = trimmed;
+      flash('翻译已更新');
+    } catch (err) {
+      flash(`修改失败：${err.message || err}`, true);
+    }
+  }
+
+  $('learn-yes-btn').addEventListener('click', () => reveal(true));
+  $('learn-no-btn').addEventListener('click',  () => reveal(false));
+  $('learn-exit-btn').addEventListener('click', earlyExit);
+  replayBtn.addEventListener('click', () => dictPlayTTS(word.english));
+  editBtn.addEventListener('click', editTranslation);
+
+  function onKey(e) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (!revealed) reveal(true); else grade(true);
+    } else if (e.key === ' ') {
+      e.preventDefault();
+      if (!revealed) reveal(false); else grade(false);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      earlyExit();
+    }
+  }
+  window.addEventListener('keydown', onKey);
+}
+
+// ---- Learn Summary Screen ----
+function learnShowSummary() {
+  const s = learnState;
+  const total = s.knownWords.length + s.unknownWords.length;
+
+  let knownHTML = '';
+  if (s.knownWords.length > 0) {
+    knownHTML = `<h4 style="color:#86efac;margin:8px 0 4px;">✓ 认识 (${s.knownWords.length})</h4>`;
+    for (const w of s.knownWords) {
+      knownHTML += `<div class="dict-word-item"><span class="dict-word-en">${escapeHTML(w.english)}</span><span class="dict-word-zh">${escapeHTML(w.chinese)}</span></div>`;
+    }
+  }
+
+  let unknownHTML = '';
+  if (s.unknownWords.length > 0) {
+    unknownHTML = `<h4 style="color:#fca5a5;margin:8px 0 4px;">✗ 不认识 (${s.unknownWords.length})</h4>`;
+    for (const w of s.unknownWords) {
+      unknownHTML += `<div class="dict-word-item"><span class="dict-word-en">${escapeHTML(w.english)}</span><span class="dict-word-zh">${escapeHTML(w.chinese)}</span></div>`;
+    }
+  }
+
+  let csvBtns = '<div class="dict-csv-row">';
+  if (s.knownWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="learn-lp-known">🔗 循环链接·认识</button>`;
+  if (s.unknownWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="learn-lp-unknown">🔗 循环链接·不认识</button>`;
+  csvBtns += '</div><div class="dict-csv-row">';
+  if (s.knownWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="learn-cp-known">📋 复制认识的</button>`;
+  if (s.unknownWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="learn-cp-unknown">📋 复制不认识的</button>`;
+  csvBtns += '</div>';
+
+  learnBody.innerHTML = `
+<div class="recog-summary">
+  <h3 class="recog-summary-title">学习总结 · ${escapeHTML(s.dayName)}</h3>
+  <div class="dict-stats">
+    <div><span class="dict-stat-num">${total}</span> TOTAL</div>
+    <div><span class="dict-stat-num good">${s.knownWords.length}</span> 认识</div>
+    <div><span class="dict-stat-num bad">${s.unknownWords.length}</span> 不认识</div>
+  </div>
+  <div class="dict-word-list">
+    ${unknownHTML}
+    ${knownHTML}
+  </div>
+  ${csvBtns}
+  <div class="recog-summary-actions">
+    <button class="dict-start-btn" id="learn-redo">↻ 重新本课</button>
+    <button class="dict-start-btn" id="learn-repick">✂ 换段落</button>
+    <button class="dict-back-btn"  id="learn-home">⌂ 回主页</button>
+  </div>
+</div>
+  `;
+
+  const lpKnown   = $('learn-lp-known');
+  const lpUnknown = $('learn-lp-unknown');
+  const cpKnown   = $('learn-cp-known');
+  const cpUnknown = $('learn-cp-unknown');
+  if (lpKnown)   lpKnown.addEventListener('click', () => dictCopyLoopURL(s.knownWords, '认识的'));
+  if (lpUnknown) lpUnknown.addEventListener('click', () => dictCopyLoopURL(s.unknownWords, '不认识的'));
+  if (cpKnown)   cpKnown.addEventListener('click', () => dictCopyCSV(s.knownWords, '认识的单词'));
+  if (cpUnknown) cpUnknown.addEventListener('click', () => dictCopyCSV(s.unknownWords, '不认识的单词'));
+
+  $('learn-redo').addEventListener('click', () => learnStartSession(s.words, s.dayName, s.allWords, s.baseDayName));
+  $('learn-repick').addEventListener('click', () => {
+    if (s.allWords && s.allWords.length) learnShowPortionPicker(s.allWords, s.baseDayName || s.dayName);
+    else learnShowSetup();
+  });
+  $('learn-home').addEventListener('click', learnReset);
+  $('learn-title').textContent = '学习新词';
+
+  saveSession({
+    mode: 'learn',
+    dayName: s.dayName,
+    goodLabel: '认识',
+    badLabel: '不认识',
+    goodWords: s.knownWords,
+    badWords: s.unknownWords,
+  });
+}
+
+function learnReset() {
+  learnState = { words: [], ordered: [], currentIdx: 0, knownWords: [], unknownWords: [], dayName: '', allWords: [], baseDayName: '' };
+  $('learn-title').textContent = '学习新词';
+  learnShowSetup();
+}
+
+// ========================================================
 //  Recognition Module
 // ========================================================
 const recogPanel = $('recognition-panel');
@@ -1002,6 +1425,7 @@ function openRecognition() {
   showSidebarContent('recog');
   recogPanel.classList.add('visible');
   dictPanel.classList.remove('visible');
+  learnPanel.classList.remove('visible');
   $('recog-title').textContent = '认词模式';
   if (!recogState.words.length) {
     recogShowSetup();
@@ -1114,6 +1538,70 @@ function showCustomPathScreen(bodyEl, onBack, onLoaded) {
   });
 }
 
+// Parses pasted CSV text (format: English,Chinese\n"word","翻译") into [{english, chinese}].
+function parseCSVText(text) {
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  const words = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    // Skip header row
+    if (i === 0 && /^\uFEFF?english/i.test(line)) continue;
+    // Try quoted CSV: "en","zh"
+    const quotedMatch = line.match(/^"(.+?)"\s*,\s*"(.+?)"$/);
+    if (quotedMatch) {
+      words.push({ english: quotedMatch[1].replace(/""/g, '"'), chinese: quotedMatch[2].replace(/""/g, '"') });
+      continue;
+    }
+    // Try unquoted CSV: en,zh
+    const parts = line.split(',');
+    if (parts.length >= 2) {
+      const en = parts[0].trim();
+      const zh = parts.slice(1).join(',').trim();
+      if (en && zh) {
+        words.push({ english: en, chinese: zh });
+      }
+    }
+  }
+  return words;
+}
+
+// Renders a "paste CSV content" form into the given body element.
+// onLoaded(words, label) is called once the CSV is parsed.
+function showPasteCSVScreen(bodyEl, onBack, onLoaded) {
+  bodyEl.innerHTML = `
+<div class="dict-setup">
+  <div class="dict-setup-label">粘贴 CSV 内容</div>
+  <textarea id="paste-csv-textarea" class="paste-csv-textarea" rows="8" placeholder="English,Chinese&#10;&quot;apple&quot;,&quot;苹果&quot;&#10;&quot;banana&quot;,&quot;香蕉&quot;" spellcheck="false"></textarea>
+  <div class="recog-summary-actions">
+    <button class="dict-back-btn" id="paste-csv-back">← 返回</button>
+    <button class="dict-start-btn" id="paste-csv-load">加载</button>
+  </div>
+  <div class="dict-loading" id="paste-csv-msg"></div>
+</div>
+  `;
+  const textarea = bodyEl.querySelector('#paste-csv-textarea');
+  const loadMsg = bodyEl.querySelector('#paste-csv-msg');
+  setTimeout(() => textarea.focus(), 50);
+
+  bodyEl.querySelector('#paste-csv-back').addEventListener('click', onBack);
+
+  function go() {
+    const text = textarea.value.trim();
+    if (!text) {
+      loadMsg.textContent = '❌ 请粘贴 CSV 内容';
+      return;
+    }
+    try {
+      const words = parseCSVText(text);
+      if (!words || !words.length) throw new Error('未能解析出任何单词，请检查格式');
+      onLoaded(words, `粘贴(${words.length}词)`);
+    } catch (err) {
+      loadMsg.textContent = `❌ ${err.message}`;
+    }
+  }
+  bodyEl.querySelector('#paste-csv-load').addEventListener('click', go);
+}
+
 // ---- Recognition Setup Screen ----
 function recogShowSetup() {
   recogBody.innerHTML = `
@@ -1121,7 +1609,8 @@ function recogShowSetup() {
   <div class="dict-setup-label">认哪一天？</div>
   <div class="dict-day-grid" id="recog-day-grid"></div>
   <div class="setup-aux-row">
-    <button class="dict-back-btn" id="recog-custom-btn">📂 自定义 CSV 路径...</button>
+    <button class="dict-back-btn" id="recog-custom-btn">📂 自定义路径</button>
+    <button class="dict-back-btn" id="recog-paste-csv-btn">📋 粘贴 CSV</button>
     <button class="dict-back-btn" id="recog-history-btn">📜 历史会话</button>
   </div>
   <div class="dict-loading" id="recog-load-msg"></div>
@@ -1160,6 +1649,9 @@ function recogShowSetup() {
 
   $('recog-custom-btn').addEventListener('click', () => {
     showCustomPathScreen(recogBody, recogShowSetup, (words, label) => recogShowPortionPicker(words, label));
+  });
+  $('recog-paste-csv-btn').addEventListener('click', () => {
+    showPasteCSVScreen(recogBody, recogShowSetup, (words, label) => recogShowPortionPicker(words, label));
   });
   $('recog-history-btn').addEventListener('click', () => {
     showSessionHistoryScreen(recogBody, (s) => s.mode === 'recognition', recogShowSetup);
@@ -1528,7 +2020,8 @@ function dictShowSetup() {
   <div class="dict-setup-label">听写哪一天？</div>
   <div class="dict-day-grid" id="dict-day-grid"></div>
   <div class="setup-aux-row">
-    <button class="dict-back-btn" id="dict-custom-btn">📂 自定义 CSV 路径...</button>
+    <button class="dict-back-btn" id="dict-custom-btn">📂 自定义路径</button>
+    <button class="dict-back-btn" id="dict-paste-csv-btn">📋 粘贴 CSV</button>
     <button class="dict-back-btn" id="dict-history-btn">📜 历史会话</button>
   </div>
   <div class="dict-loading" id="dict-load-msg"></div>
@@ -1570,6 +2063,9 @@ function dictShowSetup() {
 
   $('dict-custom-btn').addEventListener('click', () => {
     showCustomPathScreen(dictBody, dictShowSetup, (words, label) => dictShowPortionPicker(words, label));
+  });
+  $('dict-paste-csv-btn').addEventListener('click', () => {
+    showPasteCSVScreen(dictBody, dictShowSetup, (words, label) => dictShowPortionPicker(words, label));
   });
   $('dict-history-btn').addEventListener('click', () => {
     showSessionHistoryScreen(dictBody, (s) => s.mode === 'dictation_strict' || s.mode === 'dictation_skip', dictShowSetup);
@@ -2428,6 +2924,19 @@ scalePanel(popup, 420, 16);
   });
   ro.observe(recogPanel);
 }
+
+// Learn panel: base 460px → 18px font
+{
+  const ro = new ResizeObserver(entries => {
+    for (const entry of entries) {
+      const w = entry.contentRect.width;
+      const scale = Math.max(0.6, Math.min(2.5, w / 460));
+      learnPanel.style.fontSize = (18 * scale) + 'px';
+    }
+  });
+  ro.observe(learnPanel);
+}
+
 
 // ========================================================
 //  Study Time Tracker — silent background timer

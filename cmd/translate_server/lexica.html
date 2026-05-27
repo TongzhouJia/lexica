@@ -58,6 +58,9 @@
         <button class="sidebar-tab" id="tab-dict-strict" title="听写">
           <span class="tab-icon">✍️</span>听写
         </button>
+        <button class="sidebar-tab" id="tab-learn" title="学习新词·按顺序认词">
+          <span class="tab-icon">📖</span>新词
+        </button>
         <button class="sidebar-tab" id="tab-recog" title="认词·看英文标认识">
           <span class="tab-icon">👁️</span>认词
         </button>
@@ -99,6 +102,17 @@
             style="font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:8px;"
             id="sidebar-dict-mode-label">听写模式</div>
           <div style="font-size:13px;line-height:1.6;" id="sidebar-dict-mode-desc"></div>
+        </div>
+      </div>
+
+      <!-- Tab: Learn new words info -->
+      <div class="sidebar-content hidden" id="sidebar-learn-info">
+        <div style="text-align:center;padding:32px 12px;color:var(--ink-soft);">
+          <div style="font-size:32px;margin-bottom:12px;">📖</div>
+          <div
+            style="font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:8px;">
+            学习新词</div>
+          <div style="font-size:13px;line-height:1.6;">按原始顺序逐词过，标记认识或不认识。</div>
         </div>
       </div>
 
@@ -251,6 +265,19 @@
     </div>
     <iframe id="popup-frame" sandbox="allow-same-origin allow-scripts allow-popups"></iframe>
     <div id="popup-loading">查询中</div>
+  </div>
+
+  <!-- Learn Panel -->
+  <div id="learn-panel">
+    <div id="learn-header">
+      <div id="learn-title">学习新词</div>
+      <div class="popup-actions">
+        <button id="learn-close-btn" class="icon-only" title="关闭">✕</button>
+      </div>
+    </div>
+    <div id="learn-body">
+      <!-- Screens injected by JS -->
+    </div>
   </div>
 
   <!-- Recognition Panel -->
