@@ -369,7 +369,11 @@ func emailReminderHandler() http.HandlerFunc {
 
 		subject := fmt.Sprintf("⏰ 别摸鱼啦！回来学英语 — %s", date)
 		if err := sendGmailMessage(req.To, subject, sb.String()); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			if strings.Contains(err.Error(), "not authorized") || strings.Contains(err.Error(), "token refresh") {
+				http.Error(w, err.Error(), http.StatusUnauthorized)
+			} else {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
 			return
 		}
 
@@ -406,7 +410,11 @@ func emailSendHandler(geminiKey, geminiModel string) http.HandlerFunc {
 		subject := fmt.Sprintf("📚 英语学习日报 — %s", today)
 
 		if err := sendGmailMessage(req.To, subject, report); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			if strings.Contains(err.Error(), "not authorized") || strings.Contains(err.Error(), "token refresh") {
+				http.Error(w, err.Error(), http.StatusUnauthorized)
+			} else {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
 			return
 		}
 
