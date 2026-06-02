@@ -711,6 +711,8 @@ const dictCloseBtn = $('dict-close-btn');
 // Sidebar tabs
 const tabFiles = $('tab-files');
 const tabDictStrict = $('tab-dict-strict');
+const tabDictAdvanced = $('tab-dict-advanced');
+const tabDictUltimate = $('tab-dict-ultimate');
 const tabLearn = $('tab-learn');
 const tabRecog = $('tab-recog');
 const tabLoop = $('tab-loop');
@@ -730,8 +732,18 @@ const sidebarActivity = $('sidebar-activity');
 const sidebarDictLabel = $('sidebar-dict-mode-label');
 const sidebarDictDesc = $('sidebar-dict-mode-desc');
 
-// Only one dictation mode now: strict (empty enter → reveal, must type to continue)
-const dictMode = 'strict';
+// Three dictation variants share one panel + one dictState, differing mainly in
+// the question screen:
+//   basic    — 看中文，拼英文（程序判分）
+//   advanced — 听音频，拼英文（程序判分，不显示中文）
+//   ultimate — 听音频，写中文意思（自己判定对错：空格=错，回车=对）
+const DICT_VARIANTS = {
+  basic:    { title: '听写·基础', label: '听写·基础', desc: '看中文，拼出英文单词。',                mode: 'dictation_strict',   histModes: ['dictation_strict', 'dictation_skip'], goodLabel: '正确', badLabel: '错误', goodTitle: '🌟 一次拼对', badTitle: '⚠️ 需要重点复习' },
+  advanced: { title: '听写·进阶', label: '听写·进阶', desc: '听音频，拼出英文单词（不显示中文）。',   mode: 'dictation_advanced', histModes: ['dictation_advanced'],                  goodLabel: '正确', badLabel: '错误', goodTitle: '🌟 一次拼对', badTitle: '⚠️ 需要重点复习' },
+  ultimate: { title: '听写·终极', label: '听写·终极', desc: '听音频，写出中文意思，自己判定对错。',   mode: 'dictation_ultimate', histModes: ['dictation_ultimate'],                  goodLabel: '记对了', badLabel: '记错了', goodTitle: '✓ 记对了', badTitle: '✗ 记错了' },
+};
+let dictVariant = 'basic';
+function dictVariantMeta() { return DICT_VARIANTS[dictVariant] || DICT_VARIANTS.basic; }
 
 let dictState = {
   words: [],
@@ -745,10 +757,11 @@ let dictState = {
   attempts: [],
   allWords: [],
   baseDayName: '',
+  variant: 'basic',
 };
 
 function setActiveTab(tab) {
-  [tabFiles, tabDictStrict, tabLearn, tabRecog, tabLoop, tabTasks, tabTraces, tabCleaner, tabActivity].forEach(t => t.classList.remove('active'));
+  [tabFiles, tabDictStrict, tabDictAdvanced, tabDictUltimate, tabLearn, tabRecog, tabLoop, tabTasks, tabTraces, tabCleaner, tabActivity].forEach(t => t.classList.remove('active'));
   if (tab) tab.classList.add('active');
 }
 
@@ -764,16 +777,27 @@ function showSidebarContent(which) {
   sidebarActivity.classList.toggle('hidden', which !== 'activity');
 }
 
-function openDictation() {
-  setActiveTab(tabDictStrict);
+const dictTabFor = { basic: tabDictStrict, advanced: tabDictAdvanced, ultimate: tabDictUltimate };
+
+function openDictation(variant = 'basic') {
+  if (!DICT_VARIANTS[variant]) variant = 'basic';
+  const changed = dictVariant !== variant;
+  dictVariant = variant;
+  const meta = dictVariantMeta();
+
+  setActiveTab(dictTabFor[variant]);
   showSidebarContent('dict');
-  sidebarDictLabel.textContent = '听写';
-  sidebarDictDesc.textContent = '空回车可看答案，必须照着打一遍才能进入下一题。';
+  sidebarDictLabel.textContent = meta.label;
+  sidebarDictDesc.textContent = meta.desc;
 
   dictPanel.classList.add('visible');
   learnPanel.classList.remove('visible');
   recogPanel.classList.remove('visible');
-  if (!dictState.words.length) {
+
+  // Switching to a different variant starts a fresh session.
+  if (changed) dictResetState();
+  if (changed || !dictState.words.length) {
+    $('dict-title').textContent = meta.title;
     dictShowSetup();
   }
 }
@@ -790,7 +814,9 @@ tabFiles.addEventListener('click', () => {
   }
 });
 
-tabDictStrict.addEventListener('click', () => openDictation());
+tabDictStrict.addEventListener('click', () => openDictation('basic'));
+tabDictAdvanced.addEventListener('click', () => openDictation('advanced'));
+tabDictUltimate.addEventListener('click', () => openDictation('ultimate'));
 tabLearn.addEventListener('click', () => openLearn());
 tabRecog.addEventListener('click', () => openRecognition());
 tabLoop.addEventListener('click', () => {
@@ -1179,7 +1205,7 @@ function learnShowQuestion() {
     <button class="recog-no-btn" id="learn-no-btn">✗</button>
     <button class="recog-yes-btn" id="learn-yes-btn">✓</button>
   </div>
-  <div class="recog-hint" id="learn-hint">回车=认识 · 空格=不认识 · Esc=提前退出</div>
+  <div class="recog-hint" id="learn-hint">回车=认识 · 空格=不认识 · R=重听 · Esc=提前退出</div>
   <button class="recog-exit-btn" id="learn-exit-btn">⏏ 提前退出</button>
 </div>
   `;
@@ -1208,7 +1234,7 @@ function learnShowQuestion() {
     `;
     $('learn-right-btn').addEventListener('click', () => grade(true));
     $('learn-wrong-btn').addEventListener('click', () => grade(false));
-    hintEl.textContent = '回车=认对 · 空格=认错 · Esc=提前退出';
+    hintEl.textContent = '回车=认对 · 空格=认错 · R=重听 · Esc=提前退出';
   }
 
   function grade(gotRight) {
@@ -1263,6 +1289,9 @@ function learnShowQuestion() {
     } else if (e.key === ' ') {
       e.preventDefault();
       if (!revealed) reveal(false); else grade(false);
+    } else if (e.key === 'r' || e.key === 'R') {
+      e.preventDefault();
+      dictPlayTTS(word.english);
     } else if (e.key === 'Escape') {
       e.preventDefault();
       earlyExit();
@@ -1308,6 +1337,7 @@ function learnShowSummary() {
     <div><span class="dict-stat-num good">${s.knownWords.length}</span> 认识</div>
     <div><span class="dict-stat-num bad">${s.unknownWords.length}</span> 不认识</div>
   </div>
+  ${summaryRevealToggleHTML()}
   <div class="dict-word-list">
     ${unknownHTML}
     ${knownHTML}
@@ -1337,6 +1367,7 @@ function learnShowSummary() {
   });
   $('learn-home').addEventListener('click', learnReset);
   $('learn-title').textContent = '学习新词';
+  setupSummaryReveal(learnBody);
 
   saveSession({
     mode: 'learn',
@@ -1769,7 +1800,7 @@ function recogShowQuestion() {
     <button class="recog-no-btn" id="recog-no-btn">✗</button>
     <button class="recog-yes-btn" id="recog-yes-btn">✓</button>
   </div>
-  <div class="recog-hint" id="recog-hint">回车=认识 · 空格=不认识 · Esc=提前退出</div>
+  <div class="recog-hint" id="recog-hint">回车=认识 · 空格=不认识 · R=重听 · Esc=提前退出</div>
   <button class="recog-exit-btn" id="recog-exit-btn">⏏ 提前退出</button>
 </div>
   `;
@@ -1798,7 +1829,7 @@ function recogShowQuestion() {
     `;
     $('recog-right-btn').addEventListener('click', () => grade(true));
     $('recog-wrong-btn').addEventListener('click', () => grade(false));
-    hintEl.textContent = '回车=认对 · 空格=认错 · Esc=提前退出';
+    hintEl.textContent = '回车=认对 · 空格=认错 · R=重听 · Esc=提前退出';
   }
 
   function grade(gotRight) {
@@ -1855,6 +1886,9 @@ function recogShowQuestion() {
     } else if (e.key === ' ') {
       e.preventDefault();
       if (!revealed) reveal(false); else grade(false);
+    } else if (e.key === 'r' || e.key === 'R') {
+      e.preventDefault();
+      dictPlayTTS(word.english);
     } else if (e.key === 'Escape') {
       e.preventDefault();
       earlyExit();
@@ -1901,6 +1935,7 @@ function recogShowSummary() {
     <div><span class="dict-stat-num good">${s.knownWords.length}</span> 认识</div>
     <div><span class="dict-stat-num bad">${s.unknownWords.length}</span> 不认识</div>
   </div>
+  ${summaryRevealToggleHTML()}
   <div class="dict-word-list">
     ${unknownHTML}
     ${knownHTML}
@@ -1930,6 +1965,7 @@ function recogShowSummary() {
   });
   $('recog-home').addEventListener('click', recogReset);
   $('recog-title').textContent = '认词模式';
+  setupSummaryReveal(recogBody);
 
   saveSession({
     mode: 'recognition',
@@ -2068,7 +2104,8 @@ function dictShowSetup() {
     showPasteCSVScreen(dictBody, dictShowSetup, (words, label) => dictShowPortionPicker(words, label));
   });
   $('dict-history-btn').addEventListener('click', () => {
-    showSessionHistoryScreen(dictBody, (s) => s.mode === 'dictation_strict' || s.mode === 'dictation_skip', dictShowSetup);
+    const modes = dictVariantMeta().histModes;
+    showSessionHistoryScreen(dictBody, (s) => modes.includes(s.mode), dictShowSetup);
   });
 }
 
@@ -2149,9 +2186,10 @@ function dictStartSession(words, dayName, allWords, baseDayName) {
     attempts: [],
     allWords: allWords || words,
     baseDayName: baseDayName || dayName,
+    variant: dictVariant,
   };
 
-  $('dict-title').textContent = `听写 · ${dayName}`;
+  $('dict-title').textContent = `${dictVariantMeta().title} · ${dayName}`;
   flash(`已加载 ${words.length} 个单词，开始听写！`);
   preloadTTSBatch(shuffled);
   dictShowQuestion();
@@ -2230,10 +2268,15 @@ function fireStat(type, count) {
 // ---- Question Screen ----
 function dictShowQuestion() {
   const s = dictState;
+  if (s.variant === 'ultimate') { dictShowQuestionUltimate(); return; }
+
   if (s.currentIdx >= s.shuffled.length) {
     dictShowSummary();
     return;
   }
+
+  // advanced = 听音频拼英文：不显示中文，进入即自动播放
+  const isAdv = s.variant === 'advanced';
 
   fireStat('dict_word');
   const word = s.shuffled[s.currentIdx];
@@ -2266,7 +2309,7 @@ function dictShowQuestion() {
   <div class="dict-progress-bar">
     <div class="dict-progress-fill" style="width: ${pct}%"></div>
   </div>
-  <div class="dict-chinese">${escapeHTML(word.chinese)}</div>
+  <div class="dict-chinese">${isAdv ? '🎧 听音频，拼出单词' : escapeHTML(word.chinese)}</div>
   <div class="dict-hint" id="dict-hint"></div>
   <div class="dict-input-row">
     <input type="text" class="dict-answer-input" id="dict-answer" autocomplete="off" autocapitalize="none" spellcheck="false" autofocus>
@@ -2274,7 +2317,7 @@ function dictShowQuestion() {
   <div class="dict-prev-wrong" id="dict-prev-wrong"></div>
   <div class="dict-feedback" id="dict-feedback"></div>
   <div class="dict-reveal" id="dict-reveal"></div>
-  <button class="dict-play-btn" id="dict-play-btn" style="display:none">🔊 再听一次</button>
+  <button class="dict-play-btn" id="dict-play-btn" style="display:${isAdv ? '' : 'none'}">🔊 再听一次</button>
 </div>
   `;
 
@@ -2286,8 +2329,18 @@ function dictShowQuestion() {
   const prevWrongEl = $('dict-prev-wrong');
 
   setTimeout(() => answerInput.focus(), 100);
+  // advanced: play the word as soon as the question appears
+  if (isAdv) dictPlayTTS(word.english);
 
   answerInput.addEventListener('keydown', (e) => {
+    // On the "✅ 回答正确" screen the input is read-only, so R safely replays
+    // the audio without clashing with typing.
+    if (awaitingNextEnter && (e.key === 'r' || e.key === 'R')) {
+      e.preventDefault();
+      dictPlayTTS(word.english);
+      return;
+    }
+
     if (e.key !== 'Enter') return;
 
     // After skip reveal, second Enter advances to next word
@@ -2333,7 +2386,7 @@ function dictShowQuestion() {
       // Correct!
       answerInput.classList.add('correct');
       answerInput.classList.remove('wrong');
-      feedbackEl.textContent = '✅ 回答正确！按回车继续';
+      feedbackEl.textContent = '✅ 回答正确！按回车继续 · R 重听';
       feedbackEl.className = 'dict-feedback correct';
       revealEl.textContent = `${word.english} : ${word.chinese}`;
       playBtn.style.display = '';
@@ -2391,6 +2444,111 @@ function dictShowQuestion() {
   });
 }
 
+// ---- Ultimate Question Screen (听音频写中文，自己判定对错) ----
+function dictShowQuestionUltimate() {
+  const s = dictState;
+  if (s.currentIdx >= s.shuffled.length) {
+    dictShowSummary();
+    return;
+  }
+
+  fireStat('dict_word');
+  const word = s.shuffled[s.currentIdx];
+  const total = s.shuffled.length;
+  const current = s.currentIdx + 1;
+  const pct = ((current - 1) / total * 100).toFixed(1);
+  const wordStartTime = Date.now();
+
+  dictBody.innerHTML = `
+<div class="dict-question">
+  <div class="dict-progress">${current} / ${total}</div>
+  <div class="dict-progress-bar">
+    <div class="dict-progress-fill" style="width: ${pct}%"></div>
+  </div>
+  <div class="dict-chinese">🧠 听音频，写出中文意思</div>
+  <div class="dict-hint" id="dict-hint">输入中文后按回车揭晓答案</div>
+  <div class="dict-input-row">
+    <input type="text" class="dict-answer-input" id="dict-answer" autocomplete="off" spellcheck="false" autofocus>
+  </div>
+  <div class="dict-feedback" id="dict-feedback"></div>
+  <div class="dict-reveal" id="dict-reveal"></div>
+  <div class="recog-btn-row" id="dict-grade-row" style="display:none">
+    <button class="recog-no-btn" id="dict-wrong-btn">✗ 记错了</button>
+    <button class="recog-yes-btn" id="dict-right-btn">✓ 记对了</button>
+  </div>
+  <button class="dict-play-btn" id="dict-play-btn">🔊 再听一次</button>
+</div>
+  `;
+
+  const answerInput = $('dict-answer');
+  const feedbackEl = $('dict-feedback');
+  const revealEl = $('dict-reveal');
+  const hintEl = $('dict-hint');
+  const playBtn = $('dict-play-btn');
+  const gradeRow = $('dict-grade-row');
+
+  setTimeout(() => answerInput.focus(), 100);
+  dictPlayTTS(word.english);
+
+  let phase = 'answer';   // answer → grade → done
+  let typedAnswer = '';
+
+  // Reveal the answer; the program does NOT judge — the user self-grades next.
+  function reveal() {
+    if (phase !== 'answer') return;
+    phase = 'grade';
+    typedAnswer = answerInput.value.trim();
+    answerInput.readOnly = true;
+    revealEl.innerHTML = `<span class="dict-word-en">${escapeHTML(word.english)}</span> — <span class="recog-chinese-reveal">${escapeHTML(word.chinese)}</span>`;
+    feedbackEl.textContent = typedAnswer ? `你的答案：${typedAnswer}` : '（未作答）';
+    feedbackEl.className = 'dict-feedback';
+    hintEl.textContent = '空格=记错了 · 回车=记对了 · R=重听';
+    gradeRow.style.display = '';
+  }
+
+  function grade(gotRight) {
+    if (phase !== 'grade') return;
+    phase = 'done';
+    if (gotRight) s.correctWords.push(word);
+    else s.incorrectWords.push(word);
+    const now = Date.now();
+    s.attempts.push({
+      english: word.english,
+      chinese: word.chinese,
+      attempts: [typedAnswer],
+      attemptMs: [now - wordStartTime],
+      skipped: false,
+      firstTryOK: gotRight,
+      errorCount: gotRight ? 0 : 1,
+      totalMs: now - wordStartTime,
+    });
+    s.currentIdx++;
+    dictShowQuestion();
+  }
+
+  answerInput.addEventListener('keydown', (e) => {
+    // Don't treat Enter that confirms an IME (pinyin) candidate as "submit".
+    if (e.isComposing || e.keyCode === 229) return;
+    if (phase === 'answer') {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (answerInput.value.trim().toLowerCase() === 'bye') { dictShowSummary(); return; }
+        fireStat('dict_input');
+        reveal();
+      }
+      return;
+    }
+    // Grading phase: the input is read-only, so these keys are safe.
+    if (e.key === 'Enter') { e.preventDefault(); grade(true); }
+    else if (e.key === ' ') { e.preventDefault(); grade(false); }
+    else if (e.key === 'r' || e.key === 'R') { e.preventDefault(); dictPlayTTS(word.english); }
+  });
+
+  $('dict-right-btn').addEventListener('click', () => grade(true));
+  $('dict-wrong-btn').addEventListener('click', () => grade(false));
+  playBtn.addEventListener('click', () => dictPlayTTS(word.english));
+}
+
 // ---- CSV helpers ----
 function dictWordsToCSV(words) {
   let csv = '\uFEFFEnglish,Chinese\n';
@@ -2430,18 +2588,45 @@ async function dictCopyLoopURL(words, label) {
   }
 }
 
+// ---- Summary translation reveal ----
+// On every summary screen the Chinese translations start hidden (masked bars).
+// Click a single bar to peek at just that word, or use the toggle to flip all.
+function summaryRevealToggleHTML() {
+  return `<div class="dict-csv-row"><button class="dict-csv-btn zh-reveal-toggle">👁 显示全部翻译</button></div>`;
+}
+
+function setupSummaryReveal(rootEl) {
+  const list = rootEl.querySelector('.dict-word-list');
+  if (!list) return;
+  list.classList.add('zh-hidden');
+  list.addEventListener('click', (e) => {
+    const zh = e.target.closest('.dict-word-zh');
+    if (!zh || !list.classList.contains('zh-hidden')) return;
+    zh.classList.toggle('revealed');
+  });
+  const toggle = rootEl.querySelector('.zh-reveal-toggle');
+  if (toggle) {
+    toggle.addEventListener('click', () => {
+      const hidden = list.classList.toggle('zh-hidden');
+      if (hidden) list.querySelectorAll('.dict-word-zh.revealed').forEach(el => el.classList.remove('revealed'));
+      toggle.textContent = hidden ? '👁 显示全部翻译' : '🙈 隐藏全部翻译';
+    });
+  }
+}
+
 // ---- Summary Screen ----
 function dictShowSummary() {
   const s = dictState;
+  const meta = DICT_VARIANTS[s.variant] || DICT_VARIANTS.basic;
   const practiced = s.correctWords.length + s.incorrectWords.length;
 
   // Persist the per-word attempts and a session record (fire-and-forget)
   saveTrace();
   saveSession({
-    mode: 'dictation_strict',
+    mode: meta.mode,
     dayName: s.dayName,
-    goodLabel: '正确',
-    badLabel: '错误',
+    goodLabel: meta.goodLabel,
+    badLabel: meta.badLabel,
     goodWords: s.correctWords,
     badWords: s.incorrectWords,
   });
@@ -2461,7 +2646,7 @@ function dictShowSummary() {
 
   let correctHTML = '';
   if (s.correctWords.length > 0) {
-    correctHTML = `<h4>🌟 一次拼对 (${s.correctWords.length})</h4>`;
+    correctHTML = `<h4>${meta.goodTitle} (${s.correctWords.length})</h4>`;
     for (const w of s.correctWords) {
       correctHTML += `<div class="dict-word-item"><span class="dict-word-en">${escapeHTML(w.english)}</span><span class="dict-word-zh">${escapeHTML(w.chinese)}</span></div>`;
     }
@@ -2469,7 +2654,7 @@ function dictShowSummary() {
 
   let incorrectHTML = '';
   if (s.incorrectWords.length > 0) {
-    incorrectHTML = `<h4>⚠️ 需要重点复习 (${s.incorrectWords.length})</h4>`;
+    incorrectHTML = `<h4>${meta.badTitle} (${s.incorrectWords.length})</h4>`;
     for (const w of s.incorrectWords) {
       incorrectHTML += `<div class="dict-word-item"><span class="dict-word-en">${escapeHTML(w.english)}</span><span class="dict-word-zh">${escapeHTML(w.chinese)}</span></div>`;
     }
@@ -2490,7 +2675,7 @@ function dictShowSummary() {
 
   dictBody.innerHTML = `
 <div class="dict-summary">
-  <h3 class="dict-summary-title">听写总结 · ${escapeHTML(s.dayName)}</h3>
+  <h3 class="dict-summary-title">${escapeHTML(meta.title)}总结 · ${escapeHTML(s.dayName)}</h3>
   <div class="dict-stats">
     <div>
       <span class="dict-stat-num">${practiced}</span>
@@ -2506,6 +2691,7 @@ function dictShowSummary() {
     </div>
   </div>
   ${perfectMsg}
+  ${summaryRevealToggleHTML()}
   <div class="dict-word-list">
     ${incorrectHTML}
     ${correctHTML}
@@ -2534,10 +2720,12 @@ function dictShowSummary() {
     else dictShowSetup();
   });
   $('dict-home').addEventListener('click', dictReset);
-  $('dict-title').textContent = '听写模式';
+  $('dict-title').textContent = meta.title;
+  setupSummaryReveal(dictBody);
 }
 
-function dictReset() {
+// Clears the session but keeps the active variant.
+function dictResetState() {
   dictState = {
     words: [],
     shuffled: [],
@@ -2550,8 +2738,13 @@ function dictReset() {
     attempts: [],
     allWords: [],
     baseDayName: '',
+    variant: dictVariant,
   };
-  $('dict-title').textContent = '听写模式';
+}
+
+function dictReset() {
+  dictResetState();
+  $('dict-title').textContent = dictVariantMeta().title;
   dictShowSetup();
 }
 
@@ -2869,7 +3062,7 @@ async function saveTrace() {
   const payload = {
     timestamp: ts,
     dayName: dictState.dayName,
-    mode: dictMode,
+    mode: (DICT_VARIANTS[dictState.variant] || DICT_VARIANTS.basic).mode,
     words: dictState.attempts,
     total,
     firstTryCorrect,

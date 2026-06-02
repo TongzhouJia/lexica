@@ -1558,6 +1558,26 @@ main.sun-bleed {
   font-size: 0.9em;
 }
 
+/* Hidden translations on summary screens: masked as a bar by default;
+   click a single word to peek, or use the toggle to reveal them all. */
+.dict-word-list.zh-hidden .dict-word-zh:not(.revealed) {
+  color: transparent;
+  background: rgba(196, 181, 253, 0.18);
+  border-radius: 5px;
+  min-width: 52px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s;
+}
+
+.dict-word-list.zh-hidden .dict-word-zh:not(.revealed):hover {
+  background: rgba(196, 181, 253, 0.34);
+}
+
+.zh-reveal-toggle {
+  margin: 0 auto;
+}
+
 /* CSV download buttons */
 .dict-csv-row {
   display: flex;
