@@ -17,13 +17,8 @@ RUN apk add --no-cache ca-certificates tzdata
 ENV TZ=Asia/Shanghai
 WORKDIR /app
 
-# Binary
+# Binary (frontend assets under cmd/translate_server/web are embedded via go:embed)
 COPY --from=builder /out/translate_server /app/translate_server
-
-# Static assets read at runtime from <projectRoot>/cmd/translate_server/
-COPY cmd/translate_server/lexica.html /app/cmd/translate_server/lexica.html
-COPY cmd/translate_server/lexica.css  /app/cmd/translate_server/lexica.css
-COPY cmd/translate_server/lexica.js   /app/cmd/translate_server/lexica.js
 
 # .env / credentials / data are mounted as volumes by docker-compose
 EXPOSE 8080

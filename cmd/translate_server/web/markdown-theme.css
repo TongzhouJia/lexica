@@ -1,0 +1,311 @@
+/*
+ * Markdown reader theme — adapted from the Typora "claude-like" theme.
+ * Source: ~/Library/Application Support/abnerworks.Typora/themes/claude-like.css
+ * Scoped to #content[data-mode="markdown"] so it only restyles rendered
+ * Markdown documents (not plain text / CSV / docx reader output).
+ * Typora-editor-only selectors (.md-fences, CodeMirror, sidebar, megamenu…)
+ * are dropped because marked.js emits plain semantic HTML.
+ */
+
+#content[data-mode="markdown"] {
+  /* Palette + fonts kept local to this scope to avoid clashing with the
+     app's own :root variables. */
+  --md-text: #2b2621;
+  --md-heading: #1c1815;
+  --md-accent: #bc6a3a;
+  --md-accent-hover: #9d552d;
+  --md-border: #ddd5ca;
+  --md-control-text: #72695e;
+  --md-quote-bg: #f3ede5;
+  --md-quote-border: #d8cbbb;
+  --md-quote-text: #625950;
+  --md-code-bg: #fcfcfa;
+  --md-code-text: #1c1815;
+  --md-code-border: #e9e2d8;
+  --md-code-muted: #6f665d;
+  --md-inline-code-color: #b14a40;
+  --md-inline-code-bg: #f2eeea;
+  --md-inline-code-border: #d7cec5;
+  --md-table-border-strong: #cbb9a6;
+  --md-table-row-border: rgba(114, 105, 94, 0.26);
+  --md-table-hover: rgba(188, 106, 58, 0.05);
+
+  --md-font-body: "Anthropic Serif", Georgia, "Times New Roman", "Songti SC", "Noto Serif CJK SC", "Source Han Serif SC", "PingFang SC", "Hiragino Sans GB", serif;
+  --md-font-mono: Menlo, Monaco, "SF Mono", Consolas, "Sarasa Mono SC", "Cascadia Code", monospace;
+
+  font-family: var(--md-font-body);
+  color: var(--md-text);
+  line-height: 1.62;
+  letter-spacing: 0;
+  font-weight: 400;
+  -webkit-font-smoothing: antialiased;
+
+  /* 短内容居中、长内容填满：宽度收缩到内容本身，再用 auto margin 居中。
+     内容短 → 盒子窄 → 两侧 auto margin 变大；内容长 → 撑满容器 →
+     margin 收缩到 0，靠 padding 兜住边缘。逻辑全交给浏览器，无需 JS。 */
+  width: fit-content;
+  max-width: min(100%, 70ch);   /* 不超过容器，长文也有舒服的阅读宽度 */
+  margin-inline: auto;
+  padding-inline: 28px;
+  box-sizing: border-box;
+}
+
+@media (max-width: 600px) {
+  #content[data-mode="markdown"] {
+    padding-inline: 16px;
+  }
+}
+
+/* Headings */
+#content[data-mode="markdown"] h1,
+#content[data-mode="markdown"] h2,
+#content[data-mode="markdown"] h3,
+#content[data-mode="markdown"] h4,
+#content[data-mode="markdown"] h5,
+#content[data-mode="markdown"] h6 {
+  font-family: var(--md-font-body);
+  font-weight: 600;
+  font-style: normal;
+  line-height: 1.3;
+  color: var(--md-heading);
+  letter-spacing: 0;
+  margin: 1.45rem 0 0.7rem;
+}
+
+#content[data-mode="markdown"] h1 {
+  font-size: 1.84em;
+  line-height: 1.16;
+  margin-top: 0.35rem;
+}
+
+#content[data-mode="markdown"] h2 {
+  font-size: 1.48em;
+  line-height: 1.2;
+}
+
+#content[data-mode="markdown"] h3 {
+  font-size: 1.24em;
+  line-height: 1.32;
+}
+
+#content[data-mode="markdown"] h4 {
+  font-size: 1.12em;
+}
+
+#content[data-mode="markdown"] h5 {
+  font-size: 1em;
+}
+
+#content[data-mode="markdown"] h6 {
+  font-size: 1em;
+  color: var(--md-control-text);
+}
+
+#content[data-mode="markdown"] h1 code,
+#content[data-mode="markdown"] h2 code,
+#content[data-mode="markdown"] h3 code,
+#content[data-mode="markdown"] h4 code,
+#content[data-mode="markdown"] h5 code,
+#content[data-mode="markdown"] h6 code {
+  font-size: inherit;
+}
+
+/* Body text */
+#content[data-mode="markdown"] p,
+#content[data-mode="markdown"] blockquote,
+#content[data-mode="markdown"] ul,
+#content[data-mode="markdown"] ol,
+#content[data-mode="markdown"] dl,
+#content[data-mode="markdown"] table {
+  margin: 0.78em 0;
+}
+
+#content[data-mode="markdown"] strong,
+#content[data-mode="markdown"] b {
+  font-family: var(--md-font-body);
+  font-weight: 700;
+  color: var(--md-heading);
+  font-synthesis: weight;
+}
+
+#content[data-mode="markdown"] a {
+  color: var(--md-accent);
+  text-decoration: none;
+}
+
+#content[data-mode="markdown"] a:hover {
+  color: var(--md-accent-hover);
+  text-decoration: underline;
+}
+
+/* Lists */
+#content[data-mode="markdown"] ul,
+#content[data-mode="markdown"] ol {
+  padding-left: 1.45rem;
+}
+
+#content[data-mode="markdown"] li {
+  padding-left: 0.15rem;
+  margin: 0.25em 0;
+}
+
+#content[data-mode="markdown"] li > ol,
+#content[data-mode="markdown"] li > ul {
+  margin: 0;
+}
+
+#content[data-mode="markdown"] ul li::marker,
+#content[data-mode="markdown"] ol li::marker {
+  color: var(--md-control-text);
+}
+
+/* Rules */
+#content[data-mode="markdown"] hr {
+  height: 1px;
+  padding: 0;
+  margin: 26px 0;
+  background-color: var(--md-border);
+  border: 0 none;
+  overflow: hidden;
+  opacity: 0.75;
+}
+
+/* Blockquotes */
+#content[data-mode="markdown"] blockquote {
+  border-left: 2px solid var(--md-quote-border);
+  background-color: var(--md-quote-bg);
+  padding: 0.55rem 1rem;
+  color: var(--md-quote-text);
+  border-radius: 10px;
+  font-style: normal;
+}
+
+#content[data-mode="markdown"] blockquote blockquote {
+  padding-right: 0;
+}
+
+/* Images */
+#content[data-mode="markdown"] img {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Inline code */
+#content[data-mode="markdown"] code,
+#content[data-mode="markdown"] tt {
+  font-family: var(--md-font-mono);
+  border: 1px solid var(--md-inline-code-border);
+  background-color: var(--md-inline-code-bg);
+  color: var(--md-inline-code-color);
+  border-radius: 999px;
+  padding: 0.08em 0.42em 0.1em;
+  font-size: 0.9em;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45);
+}
+
+/* Fenced code blocks */
+#content[data-mode="markdown"] pre {
+  font-family: var(--md-font-mono);
+  border: 1px solid var(--md-code-border);
+  background-color: var(--md-code-bg);
+  color: var(--md-code-text);
+  border-radius: 8px;
+  padding: 0.9rem 1rem 0.85rem;
+  font-size: 0.9em;
+  line-height: 1.55;
+  box-shadow: 0 1px 0 rgba(43, 38, 33, 0.03);
+  margin: 14px 0 18px;
+  overflow: auto;
+}
+
+#content[data-mode="markdown"] pre code,
+#content[data-mode="markdown"] pre tt {
+  font-family: var(--md-font-mono);
+  color: inherit;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  box-shadow: none;
+  font-size: inherit;
+}
+
+/* Tables */
+#content[data-mode="markdown"] table {
+  width: 100%;
+  border-collapse: collapse;
+  border-top: 1px solid var(--md-table-border-strong);
+  border-bottom: 1px solid var(--md-table-border-strong);
+  background-color: transparent;
+  word-break: initial;
+}
+
+#content[data-mode="markdown"] table tr {
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+#content[data-mode="markdown"] table thead tr {
+  border-bottom: 1px solid var(--md-table-border-strong);
+}
+
+#content[data-mode="markdown"] table tbody tr {
+  border-bottom: 1px solid var(--md-table-row-border);
+}
+
+#content[data-mode="markdown"] table th {
+  font-family: var(--md-font-body);
+  font-weight: 600;
+  border: 0;
+  padding: 12px 18px 11px 0;
+  text-align: left;
+  vertical-align: bottom;
+  color: var(--md-heading);
+  font-size: 0.93rem;
+  line-height: 1.48;
+  text-transform: none;
+  letter-spacing: 0;
+  font-variant-numeric: lining-nums tabular-nums;
+}
+
+#content[data-mode="markdown"] table td {
+  border: 0;
+  padding: 12px 18px 12px 0;
+  vertical-align: top;
+  font-family: var(--md-font-body);
+  font-size: 0.93rem;
+  line-height: 1.56;
+  font-weight: 400;
+  font-variant-numeric: lining-nums tabular-nums;
+}
+
+#content[data-mode="markdown"] table th:last-child,
+#content[data-mode="markdown"] table td:last-child {
+  padding-right: 0;
+}
+
+#content[data-mode="markdown"] table tbody tr:last-child {
+  border-bottom: 0;
+}
+
+#content[data-mode="markdown"] table tbody tr:hover td {
+  background-color: var(--md-table-hover);
+}
+
+#content[data-mode="markdown"] table td strong,
+#content[data-mode="markdown"] table th strong {
+  font-family: var(--md-font-body);
+  font-weight: 700;
+  color: var(--md-heading);
+}
+
+/* Task lists (GFM) */
+#content[data-mode="markdown"] .task-list-item,
+#content[data-mode="markdown"] li.task-list-item {
+  list-style: none;
+}
+
+#content[data-mode="markdown"] input[type="checkbox"] {
+  accent-color: var(--md-accent);
+}

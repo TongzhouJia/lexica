@@ -146,6 +146,7 @@ func main() {
 	http.HandleFunc("/save", saveHandler())
 	http.HandleFunc("/lexica", lexicaHandler())
 	http.HandleFunc("/lexica.css", lexicaAssetHandler("lexica.css", "text/css; charset=utf-8"))
+	http.HandleFunc("/markdown-theme.css", lexicaAssetHandler("markdown-theme.css", "text/css; charset=utf-8"))
 	http.HandleFunc("/lexica.js", lexicaAssetHandler("lexica.js", "application/javascript; charset=utf-8"))
 	http.HandleFunc("/loop", lexicaAssetHandler("loop.html", "text/html; charset=utf-8"))
 	http.HandleFunc("/gcs/list", gcsListHandler(gcsBucket, gcsPrefix, credPath))

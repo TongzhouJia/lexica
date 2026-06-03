@@ -43,6 +43,8 @@ const gcsPrefixEl = $('gcs-prefix');
 const gcsStatusEl = $('gcs-status');
 const gcsListEl = $('gcs-list');
 const gcsRefreshBtn = $('gcs-refresh');
+const recentBtn = $('recent-btn');
+const recentMenu = $('recent-menu');
 
 let gcsFiles = [];
 let activeGCSName = '';
@@ -50,6 +52,67 @@ let openGCSFolders = new Set(JSON.parse(localStorage.getItem('lexica.gcs.openFol
 
 loadBtn.addEventListener('click', () => fileInput.click());
 gcsRefreshBtn.addEventListener('click', refreshGCSFiles);
+
+// ---- Recently opened files (re-openable GCS paths only) ----
+const RECENT_KEY = 'lexica.recentFiles';
+const RECENT_MAX = 10;
+
+function getRecentFiles() {
+  try { return JSON.parse(localStorage.getItem(RECENT_KEY) || '[]'); }
+  catch { return []; }
+}
+
+function recordRecentFile(name) {
+  if (!name) return;
+  const list = getRecentFiles().filter(n => n !== name);
+  list.unshift(name);
+  localStorage.setItem(RECENT_KEY, JSON.stringify(list.slice(0, RECENT_MAX)));
+}
+
+function toggleRecentMenu(force) {
+  const show = force !== undefined ? force : recentMenu.classList.contains('hidden');
+  if (show) { renderRecentMenu(); recentMenu.classList.remove('hidden'); }
+  else recentMenu.classList.add('hidden');
+}
+
+function renderRecentMenu() {
+  const list = getRecentFiles();
+  recentMenu.innerHTML = '';
+
+  if (!list.length) {
+    const empty = document.createElement('div');
+    empty.className = 'recent-empty';
+    empty.textContent = '暂无最近打开';
+    recentMenu.appendChild(empty);
+    return;
+  }
+
+  list.forEach(name => {
+    const item = document.createElement('button');
+    item.className = 'recent-item';
+    item.title = name;
+    item.innerHTML =
+      `<span class="recent-name">${escapeHTML(baseName(name))}</span>` +
+      `<span class="recent-path">${escapeHTML(dirName(name) || '/')}</span>`;
+    item.addEventListener('click', () => { toggleRecentMenu(false); openGCSFile(name); });
+    recentMenu.appendChild(item);
+  });
+
+  const clear = document.createElement('button');
+  clear.className = 'recent-clear';
+  clear.textContent = '清空最近';
+  clear.addEventListener('click', () => { localStorage.removeItem(RECENT_KEY); renderRecentMenu(); });
+  recentMenu.appendChild(clear);
+}
+
+recentBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleRecentMenu(); });
+document.addEventListener('click', (e) => {
+  if (!recentMenu.classList.contains('hidden') &&
+      !recentMenu.contains(e.target) && e.target !== recentBtn) {
+    toggleRecentMenu(false);
+  }
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') toggleRecentMenu(false); });
 
 fileInput.addEventListener('change', async (e) => {
   const file = e.target.files[0];
@@ -374,6 +437,7 @@ async function openGCSFile(name) {
     const blob = await res.blob();
     const file = new File([blob], baseName(name), { type: blob.type || 'application/octet-stream' });
     await openReaderFile(file, name);
+    recordRecentFile(name);
   } catch (err) {
     console.error(err);
     showStatus(`读取失败: ${err.message}`, true);

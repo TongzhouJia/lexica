@@ -20,6 +20,7 @@
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
 
   <link rel="stylesheet" href="lexica.css">
+  <link rel="stylesheet" href="markdown-theme.css">
 </head>
 
 <body>
@@ -46,6 +47,10 @@
       </label>
       <input type="file" id="file-input" accept=".txt,.csv,.md,.markdown,.pdf,.docx,.epub" hidden>
       <button id="load-btn" class="primary">打开文件</button>
+      <div class="recent-wrap">
+        <button id="recent-btn" title="最近打开过的文件">最近 ▾</button>
+        <div id="recent-menu" class="recent-menu hidden"></div>
+      </div>
     </div>
   </header>
 
