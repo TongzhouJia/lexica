@@ -23,8 +23,10 @@ import (
 // ---------------------------------------------------------------------------
 
 const (
-	dictationCollection = "dictation_days"
-	gcsDailyWordPrefix  = "study-english/vocabulary-list/daily_english_word/"
+	dictationCollection   = "dictation_days"
+	alphabetCollection    = "dictation_alphabet"
+	gcsDailyWordPrefix   = "study-english/vocabulary-list/daily_english_word/"
+	gcsAlphabetWordPrefix = "study-english/vocabulary-list/alphabet_order_word/"
 )
 
 // DictationWord is a single word entry returned to the frontend
@@ -446,5 +448,157 @@ func dictationTTSHandler(ttsKey string) http.HandlerFunc {
 		w.Header().Set("Content-Type", "audio/mpeg")
 		w.Header().Set("Cache-Control", "public, max-age=86400")
 		w.Write(audioBytes)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Alphabet word endpoints (Firestore-backed, same schema as daily words)
+// ---------------------------------------------------------------------------
+
+// importAlphabetWordsFromGCS runs once at startup: copies any alphabet_order_word/*.txt
+// from GCS into Firestore (only if the corresponding doc is missing).
+func importAlphabetWordsFromGCS(bucketName, credPath string) {
+	if firestoreClient == nil {
+		log.Println("[alpha import] skipped – Firestore not initialized")
+		return
+	}
+	if bucketName == "" || credPath == "" {
+		log.Println("[alpha import] skipped – GCS bucket/credentials not configured")
+		return
+	}
+
+	ctx := context.Background()
+	client, err := newGCSClient(ctx, credPath)
+	if err != nil {
+		log.Printf("[alpha import] GCS client error: %v", err)
+		return
+	}
+	defer client.Close()
+
+	imported, skipped, failed := 0, 0, 0
+	it := client.Bucket(bucketName).Objects(ctx, &storage.Query{Prefix: gcsAlphabetWordPrefix})
+	for {
+		attrs, err := it.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			log.Printf("[alpha import] iterator error: %v", err)
+			return
+		}
+		name := strings.TrimPrefix(attrs.Name, gcsAlphabetWordPrefix)
+		if !strings.HasSuffix(name, ".txt") || strings.Contains(name, "/") {
+			continue
+		}
+		// Skip all_words.txt — only import single-letter files
+		baseName := strings.TrimSuffix(name, ".txt")
+		if len(baseName) != 1 {
+			continue
+		}
+
+		docRef := firestoreClient.Collection(alphabetCollection).Doc(baseName)
+		if snap, err := docRef.Get(ctx); err == nil && snap.Exists() {
+			skipped++
+			continue
+		}
+
+		reader, err := client.Bucket(bucketName).Object(attrs.Name).NewReader(ctx)
+		if err != nil {
+			log.Printf("[alpha import] read %s error: %v", attrs.Name, err)
+			failed++
+			continue
+		}
+		data, err := io.ReadAll(reader)
+		reader.Close()
+		if err != nil {
+			failed++
+			continue
+		}
+
+		words := parseWordsText(string(data))
+		if _, err := docRef.Set(ctx, map[string]interface{}{
+			"letter":    baseName,
+			"words":     dictWordsToFirestoreSlice(words),
+			"updatedAt": firestore.ServerTimestamp,
+		}); err != nil {
+			log.Printf("[alpha import] Firestore write %s error: %v", baseName, err)
+			failed++
+			continue
+		}
+		imported++
+	}
+	if imported+skipped+failed > 0 {
+		log.Printf("[alpha import] done: %d imported, %d skipped, %d failed", imported, skipped, failed)
+	}
+}
+
+// dictationAlphabetLettersHandler – GET /dictation/alphabet-letters → JSON list of available letters
+func dictationAlphabetLettersHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeCORSHeaders(w)
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if firestoreClient == nil {
+			http.Error(w, "Firestore not configured", http.StatusInternalServerError)
+			return
+		}
+
+		ctx := r.Context()
+		iter := firestoreClient.Collection(alphabetCollection).Documents(ctx)
+		defer iter.Stop()
+
+		var letters []string
+		for {
+			snap, err := iter.Next()
+			if err == iterator.Done {
+				break
+			}
+			if err != nil {
+				log.Printf("[dictation/alphabet-letters] iterator error: %v", err)
+				http.Error(w, "Firestore error", http.StatusInternalServerError)
+				return
+			}
+			letters = append(letters, snap.Ref.ID)
+		}
+		sort.Strings(letters)
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		json.NewEncoder(w).Encode(letters)
+	}
+}
+
+// dictationAlphabetWordsHandler – GET /dictation/alphabet-words?letter=a → JSON word list
+func dictationAlphabetWordsHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeCORSHeaders(w)
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if firestoreClient == nil {
+			http.Error(w, "Firestore not configured", http.StatusInternalServerError)
+			return
+		}
+
+		letter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("letter")))
+		if letter == "" || len(letter) != 1 {
+			http.Error(w, "missing or invalid letter parameter (single a-z)", http.StatusBadRequest)
+			return
+		}
+
+		ctx := r.Context()
+		snap, err := firestoreClient.Collection(alphabetCollection).Doc(letter).Get(ctx)
+		if err != nil {
+			log.Printf("[dictation/alphabet-words] read %s error: %v", letter, err)
+			http.Error(w, "letter not found: "+letter, http.StatusNotFound)
+			return
+		}
+
+		words := firestoreDocToWords(snap.Data())
+		log.Printf("[dictation] loaded %d alphabet words for letter %s", len(words), letter)
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		json.NewEncoder(w).Encode(words)
 	}
 }

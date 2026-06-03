@@ -88,13 +88,22 @@ function renderRecentMenu() {
   }
 
   list.forEach(name => {
+    const isLocal = name.startsWith('local:');
+    const displayName = isLocal ? name.slice(6) : name;
     const item = document.createElement('button');
     item.className = 'recent-item';
-    item.title = name;
+    item.title = displayName;
     item.innerHTML =
-      `<span class="recent-name">${escapeHTML(baseName(name))}</span>` +
-      `<span class="recent-path">${escapeHTML(dirName(name) || '/')}</span>`;
-    item.addEventListener('click', () => { toggleRecentMenu(false); openGCSFile(name); });
+      `<span class="recent-name">${escapeHTML(baseName(displayName))}</span>` +
+      `<span class="recent-path">${isLocal ? '📁 本地文件' : escapeHTML(dirName(displayName) || '/')}</span>`;
+    item.addEventListener('click', () => {
+      toggleRecentMenu(false);
+      if (isLocal) {
+        flash('本地文件请通过「打开文件」按钮重新打开');
+      } else {
+        openGCSFile(name);
+      }
+    });
     recentMenu.appendChild(item);
   });
 
@@ -121,6 +130,7 @@ fileInput.addEventListener('change', async (e) => {
   activeGCSName = '';
   renderGCSList(gcsFiles);
   await openReaderFile(file, file.name);
+  recordRecentFile('local:' + file.name);
   fileInput.value = '';
 });
 
@@ -1122,8 +1132,18 @@ function openLearn() {
 function learnShowSetup() {
   learnBody.innerHTML = `
 <div class="dict-setup">
-  <div class="dict-setup-label">学哪一天？</div>
-  <div class="dict-day-grid" id="learn-day-grid"></div>
+  <div class="dict-source-tabs">
+    <button class="dict-source-tab active" id="learn-tab-daily">21天</button>
+    <button class="dict-source-tab" id="learn-tab-alpha">字母表</button>
+  </div>
+  <div id="learn-day-panel">
+    <div class="dict-setup-label">学哪一天？</div>
+    <div class="dict-day-grid" id="learn-day-grid"></div>
+  </div>
+  <div id="learn-alpha-panel" style="display:none">
+    <div class="dict-setup-label">选择字母</div>
+    <div class="dict-day-grid" id="learn-alpha-grid"></div>
+  </div>
   <div class="setup-aux-row">
     <button class="dict-back-btn" id="learn-custom-btn">📂 自定义路径</button>
     <button class="dict-back-btn" id="learn-paste-csv-btn">📋 粘贴 CSV</button>
@@ -1132,6 +1152,21 @@ function learnShowSetup() {
   <div class="dict-loading" id="learn-load-msg"></div>
 </div>
   `;
+
+  // Tab switching
+  const tabDaily = $('learn-tab-daily');
+  const tabAlpha = $('learn-tab-alpha');
+  const dayPanel = $('learn-day-panel');
+  const alphaPanel = $('learn-alpha-panel');
+  tabDaily.addEventListener('click', () => {
+    tabDaily.classList.add('active'); tabAlpha.classList.remove('active');
+    dayPanel.style.display = ''; alphaPanel.style.display = 'none';
+  });
+  tabAlpha.addEventListener('click', () => {
+    tabAlpha.classList.add('active'); tabDaily.classList.remove('active');
+    alphaPanel.style.display = ''; dayPanel.style.display = 'none';
+    renderAlphabetGrid($('learn-alpha-grid'), $('learn-load-msg'), (words, label) => learnShowPortionPicker(words, label));
+  });
 
   const grid = $('learn-day-grid');
   const loadMsg = $('learn-load-msg');
@@ -1714,8 +1749,18 @@ function showPasteCSVScreen(bodyEl, onBack, onLoaded) {
 function recogShowSetup() {
   recogBody.innerHTML = `
 <div class="dict-setup">
-  <div class="dict-setup-label">认哪一天？</div>
-  <div class="dict-day-grid" id="recog-day-grid"></div>
+  <div class="dict-source-tabs">
+    <button class="dict-source-tab active" id="recog-tab-daily">21天</button>
+    <button class="dict-source-tab" id="recog-tab-alpha">字母表</button>
+  </div>
+  <div id="recog-day-panel">
+    <div class="dict-setup-label">认哪一天？</div>
+    <div class="dict-day-grid" id="recog-day-grid"></div>
+  </div>
+  <div id="recog-alpha-panel" style="display:none">
+    <div class="dict-setup-label">选择字母</div>
+    <div class="dict-day-grid" id="recog-alpha-grid"></div>
+  </div>
   <div class="setup-aux-row">
     <button class="dict-back-btn" id="recog-custom-btn">📂 自定义路径</button>
     <button class="dict-back-btn" id="recog-paste-csv-btn">📋 粘贴 CSV</button>
@@ -1724,6 +1769,21 @@ function recogShowSetup() {
   <div class="dict-loading" id="recog-load-msg"></div>
 </div>
   `;
+
+  // Tab switching
+  const tabDaily = $('recog-tab-daily');
+  const tabAlpha = $('recog-tab-alpha');
+  const dayPanel = $('recog-day-panel');
+  const alphaPanel = $('recog-alpha-panel');
+  tabDaily.addEventListener('click', () => {
+    tabDaily.classList.add('active'); tabAlpha.classList.remove('active');
+    dayPanel.style.display = ''; alphaPanel.style.display = 'none';
+  });
+  tabAlpha.addEventListener('click', () => {
+    tabAlpha.classList.add('active'); tabDaily.classList.remove('active');
+    alphaPanel.style.display = ''; dayPanel.style.display = 'none';
+    renderAlphabetGrid($('recog-alpha-grid'), $('recog-load-msg'), (words, label) => recogShowPortionPicker(words, label));
+  });
 
   const grid = $('recog-day-grid');
   const loadMsg = $('recog-load-msg');
@@ -2126,12 +2186,53 @@ function endDictDrag(e) {
 dictHeader.addEventListener('pointerup', endDictDrag);
 dictHeader.addEventListener('pointercancel', endDictDrag);
 
+// ---- Shared alphabet grid renderer ----
+// Renders 26 a-z buttons into `gridEl`, fetches from /dictation/alphabet-words,
+// and calls `onLoaded(words, label)` on success.
+let _alphabetGridRendered = new WeakSet();
+function renderAlphabetGrid(gridEl, loadMsgEl, onLoaded) {
+  if (_alphabetGridRendered.has(gridEl)) return;
+  _alphabetGridRendered.add(gridEl);
+  gridEl.innerHTML = '';
+  for (let c = 97; c <= 122; c++) {
+    const letter = String.fromCharCode(c);
+    const btn = document.createElement('button');
+    btn.className = 'dict-day-btn';
+    btn.textContent = letter.toUpperCase();
+    btn.addEventListener('click', async () => {
+      Array.from(gridEl.children).forEach(b => b.disabled = true);
+      loadMsgEl.textContent = `正在加载 ${letter}.txt ...`;
+      try {
+        const res = await fetch(`${apiBase()}/dictation/alphabet-words?letter=${encodeURIComponent(letter)}`);
+        if (!res.ok) throw new Error(`找不到字母 ${letter} 的单词文件`);
+        const words = await res.json();
+        if (!words || !words.length) throw new Error(`字母 ${letter} 没有单词`);
+        onLoaded(words, `字母 ${letter.toUpperCase()}`);
+      } catch (err) {
+        loadMsgEl.textContent = `❌ ${err.message}`;
+        Array.from(gridEl.children).forEach(b => b.disabled = false);
+      }
+    });
+    gridEl.appendChild(btn);
+  }
+}
+
 // ---- Setup Screen ----
 function dictShowSetup() {
   dictBody.innerHTML = `
 <div class="dict-setup">
-  <div class="dict-setup-label">听写哪一天？</div>
-  <div class="dict-day-grid" id="dict-day-grid"></div>
+  <div class="dict-source-tabs">
+    <button class="dict-source-tab active" id="dict-tab-daily">21天</button>
+    <button class="dict-source-tab" id="dict-tab-alpha">字母表</button>
+  </div>
+  <div id="dict-day-panel">
+    <div class="dict-setup-label">听写哪一天？</div>
+    <div class="dict-day-grid" id="dict-day-grid"></div>
+  </div>
+  <div id="dict-alpha-panel" style="display:none">
+    <div class="dict-setup-label">选择字母</div>
+    <div class="dict-day-grid" id="dict-alpha-grid"></div>
+  </div>
   <div class="setup-aux-row">
     <button class="dict-back-btn" id="dict-custom-btn">📂 自定义路径</button>
     <button class="dict-back-btn" id="dict-paste-csv-btn">📋 粘贴 CSV</button>
@@ -2140,6 +2241,21 @@ function dictShowSetup() {
   <div class="dict-loading" id="dict-load-msg"></div>
 </div>
   `;
+
+  // Tab switching
+  const tabDaily = $('dict-tab-daily');
+  const tabAlpha = $('dict-tab-alpha');
+  const dayPanel = $('dict-day-panel');
+  const alphaPanel = $('dict-alpha-panel');
+  tabDaily.addEventListener('click', () => {
+    tabDaily.classList.add('active'); tabAlpha.classList.remove('active');
+    dayPanel.style.display = ''; alphaPanel.style.display = 'none';
+  });
+  tabAlpha.addEventListener('click', () => {
+    tabAlpha.classList.add('active'); tabDaily.classList.remove('active');
+    alphaPanel.style.display = ''; dayPanel.style.display = 'none';
+    renderAlphabetGrid($('dict-alpha-grid'), $('dict-load-msg'), (words, label) => dictShowPortionPicker(words, label));
+  });
 
   const grid = $('dict-day-grid');
   const loadMsg = $('dict-load-msg');

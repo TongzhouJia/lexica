@@ -1302,6 +1302,42 @@ main.sun-bleed {
   text-align: center;
 }
 
+/* Source tabs (21天 / 字母表 toggle) */
+.dict-source-tabs {
+  display: flex;
+  gap: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  padding: 3px;
+}
+
+.dict-source-tab {
+  flex: 1;
+  padding: 8px 18px;
+  font-size: 0.85em;
+  font-weight: 600;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  letter-spacing: 0.06em;
+  background: transparent;
+  color: rgba(224, 224, 224, 0.5);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.dict-source-tab:hover {
+  color: rgba(224, 224, 224, 0.8);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.dict-source-tab.active {
+  background: linear-gradient(135deg, rgba(167, 139, 250, 0.25), rgba(96, 165, 250, 0.25));
+  color: #e0e0e0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
 .dict-setup-label {
   font-size: 0.85em;
   letter-spacing: 2px;

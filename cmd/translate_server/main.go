@@ -141,6 +141,8 @@ func main() {
 
 	// One-time import: copy daily_english_word/*.txt from GCS into Firestore
 	go importDailyWordsFromGCS(gcsBucket, credPath)
+	// One-time import: copy alphabet_order_word/*.txt from GCS into Firestore
+	go importAlphabetWordsFromGCS(gcsBucket, credPath)
 
 	http.HandleFunc("/", translateHandler(translateKey, ttsKey))
 	http.HandleFunc("/play", playHandler(ttsKey))
@@ -165,6 +167,8 @@ func main() {
 	http.HandleFunc("/stats/today", statsTodayHandler())
 	http.HandleFunc("/sun/today", sunTodayHandler())
 	http.HandleFunc("/dictation/tts", dictationTTSHandler(ttsKey))
+	http.HandleFunc("/dictation/alphabet-letters", dictationAlphabetLettersHandler())
+	http.HandleFunc("/dictation/alphabet-words", dictationAlphabetWordsHandler())
 	http.HandleFunc("/trace/record", traceRecordHandler())
 	http.HandleFunc("/trace/list", traceListHandler())
 	http.HandleFunc("/trace/delete", traceDeleteHandler())
