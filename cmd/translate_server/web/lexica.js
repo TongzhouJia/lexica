@@ -708,16 +708,29 @@ closeBtn.addEventListener('click', () => {
   window.getSelection().removeAllRanges();
 });
 
-replayBtn.addEventListener('click', () => {
+function playCurrentWord() {
   if (!currentWord) return;
   fetch(`${apiBase()}/play?text=${encodeURIComponent(currentWord)}`, { mode: 'no-cors' })
     .catch(err => console.warn('play failed', err));
-});
+}
 
-// Esc to close
+replayBtn.addEventListener('click', playCurrentWord);
+
+function isEditableTarget(el) {
+  if (!el) return false;
+  const tag = el.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
+}
+
+// Esc to close · R to replay (only while the selection popup is showing,
+// mirroring the R-to-replay shortcut in the dictation modes).
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && popup.classList.contains('visible')) {
+  if (!popup.classList.contains('visible')) return;
+  if (e.key === 'Escape') {
     closeBtn.click();
+  } else if ((e.key === 'r' || e.key === 'R') && !isEditableTarget(e.target) && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    e.preventDefault();
+    playCurrentWord();
   }
 });
 
