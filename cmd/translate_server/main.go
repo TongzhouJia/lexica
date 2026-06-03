@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -184,13 +185,55 @@ func main() {
 	http.HandleFunc("/tasks/update", tasksUpdateHandler())
 	http.HandleFunc("/tasks/delete", tasksDeleteHandler())
 
+	// Bind on all interfaces by default so other machines on the LAN can
+	// reach the server via this host's IP. Override with LISTEN_ADDR
+	// (e.g. 127.0.0.1:8080 to restrict back to loopback only).
 	addr := os.Getenv("LISTEN_ADDR")
 	if addr == "" {
-		addr = "127.0.0.1:8080"
+		addr = "0.0.0.0:8080"
 	}
+	_, port, _ := net.SplitHostPort(addr)
 	fmt.Printf("Listening on http://%s\n", addr)
-	fmt.Printf("  Lexica reader: http://%s/lexica\n", addr)
-	fmt.Printf("  Dictation:     http://%s/lexica (toggle button)\n", addr)
+	fmt.Printf("  Local:   http://127.0.0.1:%s/lexica\n", port)
+	if ip := lanIP(); ip != "" {
+		fmt.Printf("  Network: http://%s:%s/lexica  (open this from other LAN devices)\n", ip, port)
+	}
+	fmt.Printf("  Dictation: use the toggle button on /lexica\n")
 	fmt.Printf("  GCS bucket: %s (prefix: %s)\n", gcsBucket, gcsPrefix)
 	log.Fatal(http.ListenAndServe(addr, nil))
+}
+
+// lanIP returns this host's LAN IPv4 address to print as a hint. It walks the
+// up, non-loopback interfaces and prefers a private-range address
+// (192.168/16, 10/8, 172.16/12) — the kind other devices on the same network
+// can actually reach — over VPN/tunnel addresses. Returns "" if none found.
+func lanIP() string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+	var fallback string
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, _ := iface.Addrs()
+		for _, a := range addrs {
+			ipNet, ok := a.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			ip := ipNet.IP.To4()
+			if ip == nil {
+				continue
+			}
+			if ip.IsPrivate() {
+				return ip.String()
+			}
+			if fallback == "" {
+				fallback = ip.String()
+			}
+		}
+	}
+	return fallback
 }
