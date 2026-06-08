@@ -997,14 +997,64 @@ const savedEmail = localStorage.getItem('lexica.emailTo');
 if (savedEmail) $('email-to').value = savedEmail;
 
 
+// Parse cleaner input: supports both comma-separated words ("apple, banana")
+// and CSV format copied from dictation/recognition result pages:
+//   English,Chinese
+//   "word","翻译"
+//   ...
+function parseCleanerInput(raw) {
+  const trimmed = raw.replace(/^\uFEFF/, '').trim();
+  if (!trimmed) return '';
+
+  const lines = trimmed.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+
+  // Detect CSV format: first line is header "English,Chinese" (case-insensitive),
+  // or every line looks like "word","translation"
+  const headerRe = /^english\s*,\s*chinese$/i;
+  const quotedRowRe = /^"([^"]*)"(?:\s*,\s*"[^"]*")*$/;
+
+  let isCSV = false;
+  let startIdx = 0;
+
+  if (lines.length >= 2 && headerRe.test(lines[0])) {
+    isCSV = true;
+    startIdx = 1; // skip header
+  } else if (lines.length >= 1 && lines.every(l => quotedRowRe.test(l))) {
+    isCSV = true;
+    startIdx = 0;
+  }
+
+  if (isCSV) {
+    const words = [];
+    for (let i = startIdx; i < lines.length; i++) {
+      const match = lines[i].match(quotedRowRe);
+      if (match && match[1].trim()) {
+        words.push(match[1].trim());
+      } else {
+        // Fallback: try unquoted first field
+        const first = lines[i].split(',')[0].replace(/"/g, '').trim();
+        if (first && first.toLowerCase() !== 'english') {
+          words.push(first);
+        }
+      }
+    }
+    return words.join(',');
+  }
+
+  // Not CSV — treat as comma-separated words (original behavior)
+  return trimmed;
+}
+
 $('cleaner-btn').addEventListener('click', async () => {
-  const input = $('cleaner-input').value.trim();
+  const raw = $('cleaner-input').value.trim();
+  if (!raw) return;
+  const input = parseCleanerInput(raw);
   if (!input) return;
-  
+
   $('cleaner-btn').disabled = true;
   $('cleaner-btn').textContent = '清理中...';
   $('cleaner-status').textContent = '';
-  
+
   try {
     const res = await fetch('/clean', {
       method: 'POST',
