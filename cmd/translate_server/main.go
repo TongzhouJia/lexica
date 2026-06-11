@@ -93,17 +93,6 @@ func main() {
 		log.Fatal("Set GOOGLE_TTS_API_KEY in .env")
 	}
 
-	geminiKey := strings.TrimSpace(os.Getenv("GEMINI_API_KEY"))
-	geminiModel := strings.TrimSpace(os.Getenv("GEMINI_MODEL"))
-	if geminiModel == "" {
-		geminiModel = defaultGeminiModel
-	}
-	if geminiKey == "" {
-		log.Println("[warn] GEMINI_API_KEY not set – /trace/ask will return an error")
-	} else {
-		log.Printf("[init] Gemini model: %s", geminiModel)
-	}
-
 	// GCS configuration
 	gcsBucket := os.Getenv("GCS_BUCKET")
 	if gcsBucket == "" {
@@ -151,7 +140,6 @@ func main() {
 	http.HandleFunc("/lexica.css", lexicaAssetHandler("lexica.css", "text/css; charset=utf-8"))
 	http.HandleFunc("/markdown-theme.css", lexicaAssetHandler("markdown-theme.css", "text/css; charset=utf-8"))
 	http.HandleFunc("/lexica.js", lexicaAssetHandler("lexica.js", "application/javascript; charset=utf-8"))
-	http.HandleFunc("/loop", lexicaAssetHandler("loop.html", "text/html; charset=utf-8"))
 	http.HandleFunc("/gcs/list", gcsListHandler(gcsBucket, gcsPrefix, credPath))
 	http.HandleFunc("/gcs/download", gcsDownloadHandler(gcsBucket, gcsPrefix, credPath))
 	http.HandleFunc("/dictation/days", dictationDaysHandler())
@@ -169,25 +157,9 @@ func main() {
 	http.HandleFunc("/dictation/tts", dictationTTSHandler(ttsKey))
 	http.HandleFunc("/dictation/alphabet-letters", dictationAlphabetLettersHandler())
 	http.HandleFunc("/dictation/alphabet-words", dictationAlphabetWordsHandler())
-	http.HandleFunc("/trace/record", traceRecordHandler())
-	http.HandleFunc("/trace/list", traceListHandler())
-	http.HandleFunc("/trace/delete", traceDeleteHandler())
-	http.HandleFunc("/trace/ask", traceAskHandler(geminiKey, geminiModel))
 	http.HandleFunc("/clean", cleanHandler())
 	http.HandleFunc("/clean/sync", cleanSyncHandler())
 	http.HandleFunc("/activity/list", activityLogListHandler())
-	http.HandleFunc("/gmail/auth", gmailAuthHandler())
-	http.HandleFunc("/gmail/callback", gmailCallbackHandler())
-	http.HandleFunc("/gmail/status", gmailStatusHandler())
-	http.HandleFunc("/email/send", emailSendHandler(geminiKey, geminiModel))
-	http.HandleFunc("/email/reminder", emailReminderHandler())
-	http.HandleFunc("/tasks/auth", tasksAuthHandler())
-	http.HandleFunc("/tasks/callback", tasksCallbackHandler())
-	http.HandleFunc("/tasks/status", tasksStatusHandler())
-	http.HandleFunc("/tasks/list", tasksListHandler())
-	http.HandleFunc("/tasks/create", tasksCreateHandler())
-	http.HandleFunc("/tasks/update", tasksUpdateHandler())
-	http.HandleFunc("/tasks/delete", tasksDeleteHandler())
 
 	// Bind on all interfaces by default so other machines on the LAN can
 	// reach the server via this host's IP. Override with LISTEN_ADDR

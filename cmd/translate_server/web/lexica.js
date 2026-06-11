@@ -802,18 +802,12 @@ const tabDictAdvanced = $('tab-dict-advanced');
 const tabDictUltimate = $('tab-dict-ultimate');
 const tabLearn = $('tab-learn');
 const tabRecog = $('tab-recog');
-const tabLoop = $('tab-loop');
-const tabTasks = $('tab-tasks');
-const tabTraces = $('tab-traces');
 const tabCleaner = $('tab-cleaner');
 const tabActivity = $('tab-activity');
 const sidebarFiles = $('sidebar-files');
 const sidebarDictInfo = $('sidebar-dict-info');
 const sidebarLearnInfo = $('sidebar-learn-info');
 const sidebarRecogInfo = $('sidebar-recog-info');
-const sidebarLoop = $('sidebar-loop');
-const sidebarTasks = $('sidebar-tasks');
-const sidebarTraces = $('sidebar-traces');
 const sidebarCleaner = $('sidebar-cleaner');
 const sidebarActivity = $('sidebar-activity');
 const sidebarDictLabel = $('sidebar-dict-mode-label');
@@ -848,7 +842,7 @@ let dictState = {
 };
 
 function setActiveTab(tab) {
-  [tabFiles, tabDictStrict, tabDictAdvanced, tabDictUltimate, tabLearn, tabRecog, tabLoop, tabTasks, tabTraces, tabCleaner, tabActivity].forEach(t => t.classList.remove('active'));
+  [tabFiles, tabDictStrict, tabDictAdvanced, tabDictUltimate, tabLearn, tabRecog, tabCleaner, tabActivity].forEach(t => t.classList.remove('active'));
   if (tab) tab.classList.add('active');
 }
 
@@ -857,9 +851,6 @@ function showSidebarContent(which) {
   sidebarDictInfo.classList.toggle('hidden', which !== 'dict');
   sidebarLearnInfo.classList.toggle('hidden', which !== 'learn');
   sidebarRecogInfo.classList.toggle('hidden', which !== 'recog');
-  sidebarLoop.classList.toggle('hidden', which !== 'loop');
-  sidebarTasks.classList.toggle('hidden', which !== 'tasks');
-  sidebarTraces.classList.toggle('hidden', which !== 'traces');
   sidebarCleaner.classList.toggle('hidden', which !== 'cleaner');
   sidebarActivity.classList.toggle('hidden', which !== 'activity');
 }
@@ -906,23 +897,6 @@ tabDictAdvanced.addEventListener('click', () => openDictation('advanced'));
 tabDictUltimate.addEventListener('click', () => openDictation('ultimate'));
 tabLearn.addEventListener('click', () => openLearn());
 tabRecog.addEventListener('click', () => openRecognition());
-tabLoop.addEventListener('click', () => {
-  setActiveTab(tabLoop);
-  showSidebarContent('loop');
-  dictPanel.classList.remove('visible');
-});
-tabTasks.addEventListener('click', () => {
-  setActiveTab(tabTasks);
-  showSidebarContent('tasks');
-  dictPanel.classList.remove('visible');
-  refreshTasks();
-});
-tabTraces.addEventListener('click', () => {
-  setActiveTab(tabTraces);
-  showSidebarContent('traces');
-  dictPanel.classList.remove('visible');
-  refreshTraces();
-});
 
 tabCleaner.addEventListener('click', () => {
   setActiveTab(tabCleaner);
@@ -949,7 +923,7 @@ async function refreshActivityLogs() {
       return;
     }
     listEl.innerHTML = '';
-    const typeIcons = {dictation:'📝', clean:'🧹', clean_sync:'☁️', email:'📧'};
+    const typeIcons = {dictation:'📝', clean:'🧹', clean_sync:'☁️'};
     for (const log of logs) {
       const div = document.createElement('div');
       div.style.cssText = 'padding:6px 8px; border-bottom:1px solid var(--rule); line-height:1.5;';
@@ -966,35 +940,6 @@ async function refreshActivityLogs() {
 }
 
 $('activity-refresh').addEventListener('click', refreshActivityLogs);
-
-// Email send
-$('email-send-btn').addEventListener('click', async () => {
-  const to = $('email-to').value.trim();
-  if (!to) { $('email-status').textContent = '请输入邮箱地址'; return; }
-  const btn = $('email-send-btn');
-  btn.disabled = true;
-  $('email-status').textContent = '发送中...';
-  try {
-    const res = await fetch(`${apiBase()}/email/send`, {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({to})
-    });
-    if (res.status === 401) {
-      $('email-status').innerHTML = '未授权，<a href="/gmail/auth" target="_blank" style="color:var(--accent);">点此授权Gmail</a>';
-      return;
-    }
-    if (!res.ok) { const t = await res.text(); throw new Error(t); }
-    $('email-status').textContent = '✅ 日报已发送到 ' + to;
-    localStorage.setItem('lexica.emailTo', to);
-  } catch(e) {
-    $('email-status').textContent = '❌ ' + e.message;
-  } finally { btn.disabled = false; }
-});
-
-// Restore saved email
-const savedEmail = localStorage.getItem('lexica.emailTo');
-if (savedEmail) $('email-to').value = savedEmail;
 
 
 // Parse cleaner input: supports both comma-separated words ("apple, banana")
@@ -1045,14 +990,16 @@ function parseCleanerInput(raw) {
   return trimmed;
 }
 
+// One click cleans locally, then immediately syncs the change to the cloud.
 $('cleaner-btn').addEventListener('click', async () => {
   const raw = $('cleaner-input').value.trim();
   if (!raw) return;
   const input = parseCleanerInput(raw);
   if (!input) return;
 
-  $('cleaner-btn').disabled = true;
-  $('cleaner-btn').textContent = '清理中...';
+  const btn = $('cleaner-btn');
+  btn.disabled = true;
+  btn.textContent = '清理中...';
   $('cleaner-status').textContent = '';
 
   try {
@@ -1061,36 +1008,21 @@ $('cleaner-btn').addEventListener('click', async () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ words: input })
     });
-    if (!res.ok) throw new Error('API Error');
+    if (!res.ok) throw new Error('本地清理失败');
     const data = await res.json();
-    $('cleaner-status').textContent = `成功本地清理 ${data.cleaned} 个单词，${data.pending_sync} 个文件待同步。`;
     $('cleaner-input').value = '';
-  } catch (err) {
-    $('cleaner-status').textContent = '清理失败，请重试。';
-    console.error(err);
-  } finally {
-    $('cleaner-btn').disabled = false;
-    $('cleaner-btn').textContent = '确认清理(本地)';
-  }
-});
+    $('cleaner-status').textContent = `本地清理 ${data.cleaned} 个单词，同步云端中...`;
 
-$('cleaner-sync-btn').addEventListener('click', async () => {
-  const btn = $('cleaner-sync-btn');
-  btn.disabled = true;
-  $('cleaner-status').textContent = '同步云端中...';
-  
-  try {
-    const res = await fetch('/clean/sync', {
-      method: 'POST'
-    });
-    if (!res.ok) throw new Error('API Error');
-    const data = await res.json();
-    $('cleaner-status').textContent = `云端同步完成，更新了 ${data.synced} 个文件。`;
+    const syncRes = await fetch('/clean/sync', { method: 'POST' });
+    if (!syncRes.ok) throw new Error('云端同步失败');
+    const syncData = await syncRes.json();
+    $('cleaner-status').textContent = `✅ 本地清理 ${data.cleaned} 个单词，云端同步了 ${syncData.synced} 个文件。`;
   } catch (err) {
-    $('cleaner-status').textContent = '云端同步失败，请重试。';
+    $('cleaner-status').textContent = `❌ ${err.message}，请重试。`;
     console.error(err);
   } finally {
     btn.disabled = false;
+    btn.textContent = '确认清理（本地 + 云端）';
   }
 });
 
@@ -1484,9 +1416,6 @@ function learnShowSummary() {
   }
 
   let csvBtns = '<div class="dict-csv-row">';
-  if (s.knownWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="learn-lp-known">🔗 循环链接·认识</button>`;
-  if (s.unknownWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="learn-lp-unknown">🔗 循环链接·不认识</button>`;
-  csvBtns += '</div><div class="dict-csv-row">';
   if (s.knownWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="learn-cp-known">📋 复制认识的</button>`;
   if (s.unknownWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="learn-cp-unknown">📋 复制不认识的</button>`;
   csvBtns += '</div>';
@@ -1513,12 +1442,8 @@ function learnShowSummary() {
 </div>
   `;
 
-  const lpKnown   = $('learn-lp-known');
-  const lpUnknown = $('learn-lp-unknown');
   const cpKnown   = $('learn-cp-known');
   const cpUnknown = $('learn-cp-unknown');
-  if (lpKnown)   lpKnown.addEventListener('click', () => dictCopyLoopURL(s.knownWords, '认识的'));
-  if (lpUnknown) lpUnknown.addEventListener('click', () => dictCopyLoopURL(s.unknownWords, '不认识的'));
   if (cpKnown)   cpKnown.addEventListener('click', () => dictCopyCSV(s.knownWords, '认识的单词'));
   if (cpUnknown) cpUnknown.addEventListener('click', () => dictCopyCSV(s.unknownWords, '不认识的单词'));
 
@@ -2105,11 +2030,7 @@ function recogShowSummary() {
     }
   }
 
-  // CSV buttons: row 1 = copy a self-contained /loop URL, row 2 = copy CSV text
   let csvBtns = '<div class="dict-csv-row">';
-  if (s.knownWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="recog-lp-known">🔗 循环链接·认识</button>`;
-  if (s.unknownWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="recog-lp-unknown">🔗 循环链接·不认识</button>`;
-  csvBtns += '</div><div class="dict-csv-row">';
   if (s.knownWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="recog-cp-known">📋 复制认识的</button>`;
   if (s.unknownWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="recog-cp-unknown">📋 复制不认识的</button>`;
   csvBtns += '</div>';
@@ -2136,12 +2057,8 @@ function recogShowSummary() {
 </div>
   `;
 
-  const lpKnown   = $('recog-lp-known');
-  const lpUnknown = $('recog-lp-unknown');
   const cpKnown   = $('recog-cp-known');
   const cpUnknown = $('recog-cp-unknown');
-  if (lpKnown)   lpKnown.addEventListener('click', () => dictCopyLoopURL(s.knownWords, '认识的'));
-  if (lpUnknown) lpUnknown.addEventListener('click', () => dictCopyLoopURL(s.unknownWords, '不认识的'));
   if (cpKnown)   cpKnown.addEventListener('click', () => dictCopyCSV(s.knownWords, '认识的单词'));
   if (cpUnknown) cpUnknown.addEventListener('click', () => dictCopyCSV(s.unknownWords, '不认识的单词'));
 
@@ -2812,25 +2729,6 @@ async function dictCopyCSV(words, label) {
   }
 }
 
-// Build a self-contained /loop URL with the CSV embedded in the hash and
-// copy it to the clipboard. Paste it into any browser — the loop page reads
-// the words straight from the URL, no server or localStorage needed.
-async function dictCopyLoopURL(words, label) {
-  if (!words || !words.length) {
-    flash('没有可循环的单词', true);
-    return;
-  }
-  let csv = dictWordsToCSV(words);
-  if (csv.charCodeAt(0) === 0xFEFF) csv = csv.slice(1); // drop BOM for a cleaner URL
-  const url = `${apiBase()}/loop#csv=${encodeURIComponent(csv)}`;
-  try {
-    await navigator.clipboard.writeText(url);
-    flash(`已复制${label}循环链接（${words.length} 词），换浏览器粘贴即可`);
-  } catch (err) {
-    flash('复制失败: ' + err.message, true);
-  }
-}
-
 // ---- Summary translation reveal ----
 // On every summary screen the Chinese translations start hidden (masked bars).
 // Click a single bar to peek at just that word, or use the toggle to flip all.
@@ -2863,8 +2761,7 @@ function dictShowSummary() {
   const meta = DICT_VARIANTS[s.variant] || DICT_VARIANTS.basic;
   const practiced = s.correctWords.length + s.incorrectWords.length;
 
-  // Persist the per-word attempts and a session record (fire-and-forget)
-  saveTrace();
+  // Persist a session record (fire-and-forget)
   saveSession({
     mode: meta.mode,
     dayName: s.dayName,
@@ -2907,11 +2804,7 @@ function dictShowSummary() {
     ? '<div style="text-align:center;margin:8px 0;font-size:1em;color:#4ade80">🎉 完美通关！没有任何错题！</div>'
     : '';
 
-  // CSV buttons: row 1 = copy a self-contained /loop URL, row 2 = copy CSV text
   let csvBtns = '<div class="dict-csv-row">';
-  if (s.correctWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="dict-lp-correct">🔗 循环链接·正确</button>`;
-  if (s.incorrectWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="dict-lp-incorrect">🔗 循环链接·错误</button>`;
-  csvBtns += '</div><div class="dict-csv-row">';
   if (s.correctWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="dict-cp-correct">📋 复制正确单词</button>`;
   if (s.incorrectWords.length > 0) csvBtns += `<button class="dict-csv-btn" id="dict-cp-incorrect">📋 复制错误单词</button>`;
   csvBtns += '</div>';
@@ -2948,12 +2841,8 @@ function dictShowSummary() {
 </div>
   `;
 
-  const lpCorrect = $('dict-lp-correct');
-  const lpIncorrect = $('dict-lp-incorrect');
   const cpCorrect = $('dict-cp-correct');
   const cpIncorrect = $('dict-cp-incorrect');
-  if (lpCorrect)   lpCorrect.addEventListener('click', () => dictCopyLoopURL(s.correctWords, '正确单词'));
-  if (lpIncorrect) lpIncorrect.addEventListener('click', () => dictCopyLoopURL(s.incorrectWords, '错误单词'));
   if (cpCorrect)   cpCorrect.addEventListener('click', () => dictCopyCSV(s.correctWords, '正确单词'));
   if (cpIncorrect) cpIncorrect.addEventListener('click', () => dictCopyCSV(s.incorrectWords, '错误单词'));
 
@@ -3050,277 +2939,6 @@ sidebarToggle.addEventListener('click', (e) => {
   sidebarToggle.textContent = collapsed ? '›' : '‹';
   localStorage.setItem('lexica.sidebarCollapsed', collapsed ? '1' : '0');
 });
-
-// ========================================================
-//  Practice Traces (sidebar list + filters + delete)
-// ========================================================
-const traceStatus = $('trace-status');
-const traceListEl = $('trace-list');
-const traceRefreshBtn = $('trace-refresh');
-const traceSelectedCount = $('trace-selected-count');
-const traceOpenAIBtn = $('trace-open-ai');
-const traceFilterBtns = document.querySelectorAll('.trace-filter-btn');
-
-let traceItems = [];
-let traceFilter = 'all';
-const selectedTraceIds = new Set();
-
-// Render any timestamp as YYYY-MM-DD HH:MM in UTC+8
-function formatTraceTime(ts) {
-  const d = new Date(ts);
-  if (isNaN(d.getTime())) return ts;
-  const plus8 = new Date(d.getTime() + 8 * 3600 * 1000);
-  const y = plus8.getUTCFullYear();
-  const m = String(plus8.getUTCMonth() + 1).padStart(2, '0');
-  const dd = String(plus8.getUTCDate()).padStart(2, '0');
-  const hh = String(plus8.getUTCHours()).padStart(2, '0');
-  const mm = String(plus8.getUTCMinutes()).padStart(2, '0');
-  return `${y}-${m}-${dd} ${hh}:${mm}`;
-}
-
-function todayYMDInPlus8() {
-  const plus8 = new Date(Date.now() + 8 * 3600 * 1000);
-  const y = plus8.getUTCFullYear();
-  const m = String(plus8.getUTCMonth() + 1).padStart(2, '0');
-  const dd = String(plus8.getUTCDate()).padStart(2, '0');
-  return `${y}-${m}-${dd}`;
-}
-
-function applyFilter(items) {
-  if (traceFilter === 'today') {
-    const today = todayYMDInPlus8();
-    return items.filter(t => formatTraceTime(t.timestamp).startsWith(today));
-  }
-  if (traceFilter === 'recent10') {
-    return items.slice(0, 10);
-  }
-  return items;
-}
-
-function updateSelectedCount() {
-  traceSelectedCount.textContent = `已选 ${selectedTraceIds.size} 条`;
-  traceOpenAIBtn.disabled = selectedTraceIds.size === 0;
-}
-
-function renderTraceList() {
-  const filtered = applyFilter(traceItems);
-
-  if (!filtered.length) {
-    const msg = traceItems.length
-      ? '当前筛选下无记录'
-      : '还没有练习记录';
-    traceListEl.innerHTML = `<div style="padding:20px;text-align:center;color:var(--ink-soft);font-size:12px;">${msg}</div>`;
-    updateSelectedCount();
-    return;
-  }
-
-  traceListEl.innerHTML = '';
-  for (const t of filtered) {
-    const item = document.createElement('div');
-    item.className = 'trace-item' + (selectedTraceIds.has(t.id) ? ' selected' : '');
-
-    const cb = document.createElement('input');
-    cb.type = 'checkbox';
-    cb.className = 'trace-checkbox';
-    cb.checked = selectedTraceIds.has(t.id);
-
-    const info = document.createElement('div');
-    info.className = 'trace-info';
-    const modeLabel = t.mode === 'strict' ? '严格' : (t.mode === 'skip' ? '跳过' : t.mode || '?');
-    info.innerHTML = `
-      <div class="trace-day">${escapeHTML(t.dayName || '(unknown)')}</div>
-      <div class="trace-meta">${escapeHTML(formatTraceTime(t.timestamp))} · ${escapeHTML(modeLabel)}</div>
-      <div class="trace-stats">
-        <span>共 ${t.total} 词</span> ·
-        <span class="good">一遍过 ${t.firstTryCorrect}</span> ·
-        <span class="bad">错 ${t.wrong}</span>
-      </div>
-    `;
-
-    const delBtn = document.createElement('button');
-    delBtn.className = 'trace-delete-btn';
-    delBtn.textContent = '×';
-    delBtn.title = '删除这条记录';
-    delBtn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      if (!confirm(`确认删除「${t.dayName || t.id}」?`)) return;
-      try {
-        const res = await fetch(`${apiBase()}/trace/delete?id=${encodeURIComponent(t.id)}`, { method: 'DELETE' });
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        selectedTraceIds.delete(t.id);
-        traceItems = traceItems.filter(x => x.id !== t.id);
-        traceStatus.textContent = `共 ${traceItems.length} 条记录`;
-        renderTraceList();
-      } catch (err) {
-        flash(`删除失败：${err.message}`, true);
-      }
-    });
-
-    const toggle = (e) => {
-      if (e.target === delBtn || delBtn.contains(e.target)) return;
-      if (e.target !== cb) cb.checked = !cb.checked;
-      if (cb.checked) selectedTraceIds.add(t.id);
-      else selectedTraceIds.delete(t.id);
-      item.classList.toggle('selected', cb.checked);
-      updateSelectedCount();
-    };
-
-    item.appendChild(cb);
-    item.appendChild(info);
-    item.appendChild(delBtn);
-    item.addEventListener('click', toggle);
-    traceListEl.appendChild(item);
-  }
-  updateSelectedCount();
-}
-
-async function refreshTraces() {
-  traceStatus.textContent = '加载中...';
-  try {
-    const res = await fetch(`${apiBase()}/trace/list`);
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    traceItems = await res.json() || [];
-    for (const id of [...selectedTraceIds]) {
-      if (!traceItems.some(t => t.id === id)) selectedTraceIds.delete(id);
-    }
-    traceStatus.textContent = `共 ${traceItems.length} 条记录`;
-    renderTraceList();
-  } catch (err) {
-    traceStatus.textContent = `❌ ${err.message}`;
-  }
-}
-
-traceRefreshBtn.addEventListener('click', refreshTraces);
-
-traceFilterBtns.forEach(btn => {
-  btn.addEventListener('click', () => {
-    traceFilterBtns.forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    traceFilter = btn.dataset.filter;
-    renderTraceList();
-  });
-});
-
-
-
-// ========================================================
-//  AI Panel (centered chat — single-shot, no context)
-// ========================================================
-const aiPanel = $('ai-panel');
-const aiPanelClose = $('ai-panel-close');
-const aiPanelMeta = $('ai-panel-meta');
-const aiEmpty = $('ai-empty');
-const aiUserMsg = $('ai-user-msg');
-const aiBotMsg = $('ai-bot-msg');
-const aiInput = $('ai-input');
-const aiSend = $('ai-send');
-
-function openAIPanel() {
-  const ids = [...selectedTraceIds];
-  if (!ids.length) {
-    flash('请先勾选至少一条记录', true);
-    return;
-  }
-  aiPanelMeta.textContent = `已选 ${ids.length} 条记录`;
-  aiEmpty.classList.remove('hidden');
-  aiUserMsg.classList.add('hidden');
-  aiBotMsg.classList.add('hidden');
-  aiInput.value = '';
-  aiPanel.classList.remove('hidden');
-  statusEl.style.display = 'none';
-  contentEl.style.display = 'none';
-  setTimeout(() => aiInput.focus(), 50);
-}
-
-function closeAIPanel() {
-  aiPanel.classList.add('hidden');
-  // Restore previous display (status only shows when no content)
-  statusEl.style.display = '';
-  contentEl.style.display = '';
-}
-
-aiPanelClose.addEventListener('click', closeAIPanel);
-traceOpenAIBtn.addEventListener('click', openAIPanel);
-
-async function aiSendQuestion() {
-  const ids = [...selectedTraceIds];
-  if (!ids.length) {
-    flash('请先在左侧勾选记录', true);
-    return;
-  }
-  const question = aiInput.value.trim();
-
-  aiEmpty.classList.add('hidden');
-  aiUserMsg.textContent = question || '(使用默认分析提示)';
-  aiUserMsg.classList.remove('hidden');
-  aiBotMsg.textContent = '正在思考...';
-  aiBotMsg.classList.remove('hidden');
-  aiBotMsg.classList.add('loading');
-  aiSend.disabled = true;
-
-  try {
-    const res = await fetch(`${apiBase()}/trace/ask`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ids, question }),
-    });
-    const body = await res.text();
-    if (!res.ok) throw new Error(body || `HTTP ${res.status}`);
-    const data = JSON.parse(body);
-    aiBotMsg.textContent = data.answer || '(空回复)';
-    aiBotMsg.classList.remove('loading');
-  } catch (err) {
-    aiBotMsg.textContent = `❌ ${err.message}`;
-    aiBotMsg.classList.remove('loading');
-  } finally {
-    aiSend.disabled = false;
-    aiInput.value = '';
-  }
-}
-
-aiSend.addEventListener('click', aiSendQuestion);
-aiInput.addEventListener('keydown', (e) => {
-  // Cmd/Ctrl+Enter to send
-  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-    e.preventDefault();
-    aiSendQuestion();
-  }
-});
-
-// Save the current session as a trace record (called from summary)
-async function saveTrace() {
-  if (!dictState.attempts || !dictState.attempts.length) return;
-  const total = dictState.attempts.length;
-  let firstTryCorrect = 0, wrong = 0;
-  for (const a of dictState.attempts) {
-    if (a.firstTryOK) firstTryCorrect++;
-    else wrong++;
-  }
-  // ISO with explicit +08:00
-  const now = new Date();
-  const plus8 = new Date(now.getTime() + 8 * 3600 * 1000);
-  const pad = (n) => String(n).padStart(2, '0');
-  const ts = `${plus8.getUTCFullYear()}-${pad(plus8.getUTCMonth() + 1)}-${pad(plus8.getUTCDate())}` +
-    `T${pad(plus8.getUTCHours())}:${pad(plus8.getUTCMinutes())}:${pad(plus8.getUTCSeconds())}+08:00`;
-  const payload = {
-    timestamp: ts,
-    dayName: dictState.dayName,
-    mode: (DICT_VARIANTS[dictState.variant] || DICT_VARIANTS.basic).mode,
-    words: dictState.attempts,
-    total,
-    firstTryCorrect,
-    wrong,
-  };
-  try {
-    await fetch(`${apiBase()}/trace/record`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-  } catch (err) {
-    console.warn('trace save failed:', err);
-  }
-}
 
 // ========================================================
 //  ResizeObserver – scale fonts when panels are resized
@@ -3515,12 +3133,7 @@ scalePanel(popup, 420, 16);
     if (fired) return;
     if (!window.lexicaReminder?.isEnabled()) return;
     fired = true;
-    try {
-      fetch(`${apiBase()}/email/reminder`, {
-        method: 'POST',
-        keepalive: true,
-      }).catch(() => {});
-    } catch (_) { /* silent */ }
+    // Email reminders removed; the bell now only governs study-time tracking.
   }
 
   function bump() {
@@ -4239,182 +3852,3 @@ scalePanel(popup, 420, 16);
   setTimeout(() => chart.resize(), 50);
   load();
 })();
-
-
-// ========================================================
-//  Google Tasks — My Tasks sidebar panel
-//  Lists / creates / completes / edits / deletes tasks in the user's
-//  default Google Tasks list ("My Tasks") via the backend OAuth proxy.
-// ========================================================
-const tasksAuthEl = $('tasks-auth');
-const tasksMainEl = $('tasks-main');
-const tasksListEl = $('tasks-list');
-const tasksStatusEl = $('tasks-status');
-const tasksNewInput = $('tasks-new-input');
-const tasksAddBtn = $('tasks-add-btn');
-const tasksRefreshBtn = $('tasks-refresh');
-
-function setTasksStatus(msg, isError) {
-  tasksStatusEl.textContent = msg || '';
-  tasksStatusEl.style.color = isError ? 'var(--accent)' : '';
-}
-
-async function refreshTasks() {
-  setTasksStatus('加载中...');
-  // First check authorization
-  let authorized = false;
-  try {
-    const res = await fetch(`${apiBase()}/tasks/status`);
-    const data = await res.json();
-    authorized = !!data.authorized;
-  } catch (_) { /* treat as unauthorized */ }
-
-  if (!authorized) {
-    tasksAuthEl.classList.remove('hidden');
-    tasksMainEl.classList.add('hidden');
-    setTasksStatus('');
-    return;
-  }
-  tasksAuthEl.classList.add('hidden');
-  tasksMainEl.classList.remove('hidden');
-
-  try {
-    const res = await fetch(`${apiBase()}/tasks/list`);
-    if (res.status === 401) {
-      tasksAuthEl.classList.remove('hidden');
-      tasksMainEl.classList.add('hidden');
-      setTasksStatus('');
-      return;
-    }
-    if (!res.ok) throw new Error((await res.text()).trim() || `HTTP ${res.status}`);
-    const data = await res.json();
-    renderTasks(data.items || []);
-  } catch (err) {
-    setTasksStatus('加载失败: ' + err.message, true);
-  }
-}
-
-function renderTasks(items) {
-  // Incomplete first, then completed; preserve API order within each group.
-  const active = items.filter(t => t.status !== 'completed');
-  const done = items.filter(t => t.status === 'completed');
-  const ordered = [...active, ...done];
-
-  setTasksStatus(active.length ? `${active.length} 个待办` : (items.length ? '全部完成 🎉' : ''));
-
-  tasksListEl.innerHTML = '';
-  if (!ordered.length) {
-    tasksListEl.innerHTML = '<div class="tasks-empty">还没有任务，上面加一个吧～</div>';
-    return;
-  }
-
-  for (const t of ordered) {
-    const item = document.createElement('div');
-    item.className = 'task-item' + (t.status === 'completed' ? ' done' : '');
-
-    const check = document.createElement('button');
-    check.className = 'task-check';
-    check.title = t.status === 'completed' ? '标记为未完成' : '标记为完成';
-    check.textContent = '✓';
-    check.addEventListener('click', () => toggleTask(t));
-
-    const body = document.createElement('div');
-    body.className = 'task-body';
-    body.title = '点击编辑';
-    const title = document.createElement('div');
-    title.className = 'task-title';
-    title.textContent = t.title || '(无标题)';
-    body.appendChild(title);
-    if (t.notes) {
-      const notes = document.createElement('div');
-      notes.className = 'task-notes';
-      notes.textContent = t.notes;
-      body.appendChild(notes);
-    }
-    body.addEventListener('click', () => editTask(t));
-
-    const del = document.createElement('button');
-    del.className = 'task-del';
-    del.title = '删除';
-    del.textContent = '×';
-    del.addEventListener('click', (e) => { e.stopPropagation(); deleteTask(t); });
-
-    item.append(check, body, del);
-    tasksListEl.appendChild(item);
-  }
-}
-
-async function addTask() {
-  const title = tasksNewInput.value.trim();
-  if (!title) return;
-  tasksAddBtn.disabled = true;
-  try {
-    const res = await fetch(`${apiBase()}/tasks/create`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title }),
-    });
-    if (!res.ok) throw new Error((await res.text()).trim() || `HTTP ${res.status}`);
-    tasksNewInput.value = '';
-    await refreshTasks();
-  } catch (err) {
-    flash('添加失败: ' + err.message, true);
-  } finally {
-    tasksAddBtn.disabled = false;
-  }
-}
-
-async function toggleTask(t) {
-  const next = t.status === 'completed' ? 'needsAction' : 'completed';
-  try {
-    const res = await fetch(`${apiBase()}/tasks/update`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: t.id, status: next }),
-    });
-    if (!res.ok) throw new Error((await res.text()).trim() || `HTTP ${res.status}`);
-    await refreshTasks();
-  } catch (err) {
-    flash('更新失败: ' + err.message, true);
-  }
-}
-
-async function editTask(t) {
-  const next = prompt('编辑任务：', t.title || '');
-  if (next == null) return;
-  const trimmed = next.trim();
-  if (!trimmed || trimmed === t.title) return;
-  try {
-    const res = await fetch(`${apiBase()}/tasks/update`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: t.id, title: trimmed }),
-    });
-    if (!res.ok) throw new Error((await res.text()).trim() || `HTTP ${res.status}`);
-    await refreshTasks();
-  } catch (err) {
-    flash('修改失败: ' + err.message, true);
-  }
-}
-
-async function deleteTask(t) {
-  if (!confirm(`删除任务「${t.title || t.id}」?`)) return;
-  try {
-    const res = await fetch(`${apiBase()}/tasks/delete`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: t.id }),
-    });
-    if (!res.ok) throw new Error((await res.text()).trim() || `HTTP ${res.status}`);
-    await refreshTasks();
-  } catch (err) {
-    flash('删除失败: ' + err.message, true);
-  }
-}
-
-tasksRefreshBtn.addEventListener('click', refreshTasks);
-tasksAddBtn.addEventListener('click', addTask);
-tasksNewInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') { e.preventDefault(); addTask(); }
-});
-
