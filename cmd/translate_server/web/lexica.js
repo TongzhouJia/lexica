@@ -803,13 +803,11 @@ const tabDictUltimate = $('tab-dict-ultimate');
 const tabLearn = $('tab-learn');
 const tabRecog = $('tab-recog');
 const tabCleaner = $('tab-cleaner');
-const tabActivity = $('tab-activity');
 const sidebarFiles = $('sidebar-files');
 const sidebarDictInfo = $('sidebar-dict-info');
 const sidebarLearnInfo = $('sidebar-learn-info');
 const sidebarRecogInfo = $('sidebar-recog-info');
 const sidebarCleaner = $('sidebar-cleaner');
-const sidebarActivity = $('sidebar-activity');
 const sidebarDictLabel = $('sidebar-dict-mode-label');
 const sidebarDictDesc = $('sidebar-dict-mode-desc');
 
@@ -842,7 +840,7 @@ let dictState = {
 };
 
 function setActiveTab(tab) {
-  [tabFiles, tabDictStrict, tabDictAdvanced, tabDictUltimate, tabLearn, tabRecog, tabCleaner, tabActivity].forEach(t => t.classList.remove('active'));
+  [tabFiles, tabDictStrict, tabDictAdvanced, tabDictUltimate, tabLearn, tabRecog, tabCleaner].forEach(t => t.classList.remove('active'));
   if (tab) tab.classList.add('active');
 }
 
@@ -852,7 +850,6 @@ function showSidebarContent(which) {
   sidebarLearnInfo.classList.toggle('hidden', which !== 'learn');
   sidebarRecogInfo.classList.toggle('hidden', which !== 'recog');
   sidebarCleaner.classList.toggle('hidden', which !== 'cleaner');
-  sidebarActivity.classList.toggle('hidden', which !== 'activity');
 }
 
 const dictTabFor = { basic: tabDictStrict, advanced: tabDictAdvanced, ultimate: tabDictUltimate };
@@ -903,43 +900,6 @@ tabCleaner.addEventListener('click', () => {
   showSidebarContent('cleaner');
   dictPanel.classList.remove('visible');
 });
-
-tabActivity.addEventListener('click', () => {
-  setActiveTab(tabActivity);
-  showSidebarContent('activity');
-  dictPanel.classList.remove('visible');
-  refreshActivityLogs();
-});
-
-// Activity log
-async function refreshActivityLogs() {
-  const listEl = $('activity-list');
-  listEl.innerHTML = '<div style="color:var(--ink-soft);padding:8px;">加载中...</div>';
-  try {
-    const res = await fetch(`${apiBase()}/activity/list`);
-    const logs = await res.json();
-    if (!logs || !logs.length) {
-      listEl.innerHTML = '<div style="color:var(--ink-soft);padding:8px;">暂无记录</div>';
-      return;
-    }
-    listEl.innerHTML = '';
-    const typeIcons = {dictation:'📝', clean:'🧹', clean_sync:'☁️'};
-    for (const log of logs) {
-      const div = document.createElement('div');
-      div.style.cssText = 'padding:6px 8px; border-bottom:1px solid var(--rule); line-height:1.5;';
-      const icon = typeIcons[log.type] || '📋';
-      const t = new Date(log.time);
-      const timeStr = `${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}`;
-      const dateStr = log.time.slice(0,10);
-      div.innerHTML = `<span style="color:var(--gcp);font-family:'JetBrains Mono',monospace;font-size:10px;">${dateStr} ${timeStr}</span> ${icon} <span style="color:var(--ink);">${log.summary}</span>`;
-      listEl.appendChild(div);
-    }
-  } catch(e) {
-    listEl.innerHTML = '<div style="color:var(--accent);padding:8px;">加载失败</div>';
-  }
-}
-
-$('activity-refresh').addEventListener('click', refreshActivityLogs);
 
 
 // Parse cleaner input: supports both comma-separated words ("apple, banana")

@@ -105,7 +105,6 @@ func sessionRecordHandler() http.HandlerFunc {
 			return
 		}
 		pruneSessions()
-		appendActivityLog(rec.Mode, fmt.Sprintf("%s %s: %s %d / %s %d", rec.Mode, rec.DayName, rec.GoodLabel, len(rec.GoodWords), rec.BadLabel, len(rec.BadWords)), nil)
 		log.Printf("[session saved] %s %s good=%d bad=%d", rec.Mode, rec.DayName, len(rec.GoodWords), len(rec.BadWords))
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"id": rec.ID})

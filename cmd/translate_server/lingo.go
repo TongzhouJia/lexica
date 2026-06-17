@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -129,16 +128,12 @@ func cleanHandler() http.HandlerFunc {
 			}
 		}
 
-		// Log the cleaning activity
 		var cleanedWords []string
 		for _, w := range words {
 			w = strings.TrimSpace(w)
 			if w != "" {
 				cleanedWords = append(cleanedWords, w)
 			}
-		}
-		if len(cleanedWords) > 0 {
-			appendActivityLog("clean", fmt.Sprintf("清理单词: %s", strings.Join(cleanedWords, ", ")), nil)
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -207,10 +202,6 @@ func cleanSyncHandler() http.HandlerFunc {
 
 		if data, err := json.MarshalIndent(records, "", "  "); err == nil {
 			os.WriteFile(pendingFile, data, 0644)
-		}
-
-		if synced > 0 {
-			appendActivityLog("clean_sync", fmt.Sprintf("已同步 %d 个文件到 Firestore", synced), nil)
 		}
 
 		w.Header().Set("Content-Type", "application/json")

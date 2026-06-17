@@ -113,7 +113,6 @@ func main() {
 	// Load disk caches
 	loadTranslateCache()
 	loadTTSCache()
-	purgeOldActivityLogs()
 	log.Printf("[init] project root: %s", projectRoot)
 
 	// Initialize Firestore client (used for dictation word lists)
@@ -159,7 +158,6 @@ func main() {
 	http.HandleFunc("/dictation/alphabet-words", dictationAlphabetWordsHandler())
 	http.HandleFunc("/clean", cleanHandler())
 	http.HandleFunc("/clean/sync", cleanSyncHandler())
-	http.HandleFunc("/activity/list", activityLogListHandler())
 
 	// Bind on all interfaces by default so other machines on the LAN can
 	// reach the server via this host's IP. Override with LISTEN_ADDR
