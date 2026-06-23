@@ -803,11 +803,13 @@ const tabDictUltimate = $('tab-dict-ultimate');
 const tabLearn = $('tab-learn');
 const tabRecog = $('tab-recog');
 const tabCleaner = $('tab-cleaner');
+const tabProgress = $('tab-progress');
 const sidebarFiles = $('sidebar-files');
 const sidebarDictInfo = $('sidebar-dict-info');
 const sidebarLearnInfo = $('sidebar-learn-info');
 const sidebarRecogInfo = $('sidebar-recog-info');
 const sidebarCleaner = $('sidebar-cleaner');
+const sidebarProgress = $('sidebar-progress');
 const sidebarDictLabel = $('sidebar-dict-mode-label');
 const sidebarDictDesc = $('sidebar-dict-mode-desc');
 
@@ -840,7 +842,7 @@ let dictState = {
 };
 
 function setActiveTab(tab) {
-  [tabFiles, tabDictStrict, tabDictAdvanced, tabDictUltimate, tabLearn, tabRecog, tabCleaner].forEach(t => t.classList.remove('active'));
+  [tabFiles, tabDictStrict, tabDictAdvanced, tabDictUltimate, tabLearn, tabRecog, tabCleaner, tabProgress].forEach(t => t.classList.remove('active'));
   if (tab) tab.classList.add('active');
 }
 
@@ -850,6 +852,7 @@ function showSidebarContent(which) {
   sidebarLearnInfo.classList.toggle('hidden', which !== 'learn');
   sidebarRecogInfo.classList.toggle('hidden', which !== 'recog');
   sidebarCleaner.classList.toggle('hidden', which !== 'cleaner');
+  sidebarProgress.classList.toggle('hidden', which !== 'progress');
 }
 
 const dictTabFor = { basic: tabDictStrict, advanced: tabDictAdvanced, ultimate: tabDictUltimate };
@@ -985,6 +988,87 @@ $('cleaner-btn').addEventListener('click', async () => {
     btn.textContent = '确认清理（本地 + 云端）';
   }
 });
+
+// ---- Progress (Sankey) sidebar: list of tracked wordlists ----
+// Each entry opens its own standalone page /progress/<uuid> in a new tab.
+function progressOpen(id) {
+  window.open(`/progress/${encodeURIComponent(id)}`, '_blank', 'noopener');
+}
+
+function progressFmtDate(iso) {
+  try {
+    const d = new Date(iso);
+    if (isNaN(d)) return iso || '';
+    const p = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  } catch { return iso || ''; }
+}
+
+async function refreshProgressList() {
+  const host = $('progress-list');
+  host.innerHTML = '<div class="library-status">加载中…</div>';
+  try {
+    const res = await fetch('/progress/list');
+    if (!res.ok) throw new Error('加载失败');
+    const items = await res.json();
+    if (!items.length) {
+      host.innerHTML = '<div class="library-status">还没有进度，点上面「新建」开始。</div>';
+      return;
+    }
+    host.innerHTML = '';
+    for (const it of items) {
+      const row = document.createElement('div');
+      row.className = 'progress-item';
+      const shortId = it.id.slice(0, 8);
+      const stat = it.roundCount
+        ? `${it.roundCount} 轮 · ${it.totalWords}→${it.remaining}`
+        : '空 · 还没粘过';
+      row.innerHTML = `
+        <button class="progress-open" title="在新标签页打开">
+          <span class="progress-uuid">${shortId}…</span>
+          <span class="progress-sub">${stat} · ${progressFmtDate(it.createdAt)}</span>
+        </button>
+        <button class="progress-del" title="删除这个进度">✕</button>`;
+      row.querySelector('.progress-open').addEventListener('click', () => progressOpen(it.id));
+      row.querySelector('.progress-del').addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!confirm(`删除进度 ${shortId}…？此操作不可撤销。`)) return;
+        await fetch(`/progress/delete?id=${encodeURIComponent(it.id)}`, { method: 'POST' });
+        refreshProgressList();
+      });
+      host.appendChild(row);
+    }
+  } catch (err) {
+    host.innerHTML = `<div class="library-status error">${err.message}</div>`;
+  }
+}
+
+tabProgress.addEventListener('click', () => {
+  setActiveTab(tabProgress);
+  showSidebarContent('progress');
+  dictPanel.classList.remove('visible');
+  learnPanel.classList.remove('visible');
+  recogPanel.classList.remove('visible');
+  refreshProgressList();
+});
+
+$('progress-new').addEventListener('click', async () => {
+  const btn = $('progress-new');
+  btn.disabled = true;
+  try {
+    const res = await fetch('/progress/create', { method: 'POST' });
+    if (!res.ok) throw new Error('创建失败');
+    const data = await res.json();
+    progressOpen(data.id);
+    refreshProgressList();
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$('progress-refresh').addEventListener('click', refreshProgressList);
 
 dictCloseBtn.addEventListener('click', () => {
   dictPanel.classList.remove('visible');

@@ -481,6 +481,61 @@ button.primary:hover {
   gap: 2px;
 }
 
+/* Progress (Sankey) sidebar list */
+.progress-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: 4px;
+  margin: 1px 0;
+}
+
+.progress-open {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  text-align: left;
+  background: var(--bg-elev);
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  padding: 8px 10px;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.progress-open:hover {
+  border-color: var(--gcp);
+  background: rgba(47, 111, 99, 0.06);
+}
+
+.progress-uuid {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--ink);
+}
+
+.progress-sub {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--ink-soft);
+}
+
+.progress-del {
+  background: transparent;
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  padding: 0 10px;
+  font-size: 13px;
+}
+
+.progress-del:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 .library-folder {
   margin: 1px 0;
 }

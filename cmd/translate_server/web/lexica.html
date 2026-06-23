@@ -78,6 +78,9 @@
         <button class="sidebar-tab" id="tab-cleaner" title="清理单词">
           <span class="tab-icon">🧹</span>清理单词
         </button>
+        <button class="sidebar-tab" id="tab-progress" title="背单词进度 · 桑基图">
+          <span class="tab-icon">📊</span>进度
+        </button>
       </div>
 
       <!-- Tab 1: GCS Files -->
@@ -140,6 +143,19 @@
           </div>
           <div id="cleaner-status" style="font-size:12px; color:var(--ink-soft); min-height:18px;"></div>
         </div>
+      </div>
+
+      <!-- Tab: Progress (Sankey) — list of tracked wordlists -->
+      <div class="sidebar-content hidden" id="sidebar-progress">
+        <div class="library-head">
+          <h2 class="library-title">背单词进度</h2>
+          <button id="progress-refresh" class="library-refresh" title="刷新">刷新</button>
+        </div>
+        <div style="font-size:12px; color:var(--ink-soft); line-height:1.5;">
+          每个进度一个独立页面，在新标签页打开。粘贴听写/认词导出的 CSV，第一次=全集，之后每次=子集，掌握的词会分叉出去。
+        </div>
+        <button id="progress-new" class="primary" style="font-size:13px; padding:9px;">➕ 新建进度</button>
+        <div id="progress-list" class="library-list"></div>
       </div>
 
     </aside>

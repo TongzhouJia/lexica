@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>背单词进度 · Lexica</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=JetBrains+Mono:wght@400;500&display=swap"
+    rel="stylesheet">
+
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+
+  <link rel="stylesheet" href="/lexica.css">
+
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: 'Newsreader', serif;
+    }
+
+    .pg-wrap {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 28px 28px 80px;
+    }
+
+    .pg-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 16px;
+      border-bottom: 1px solid var(--rule);
+      padding-bottom: 14px;
+      margin-bottom: 22px;
+      flex-wrap: wrap;
+    }
+
+    .pg-title {
+      margin: 0;
+      font-family: 'Instrument Serif', serif;
+      font-size: 30px;
+      font-weight: 400;
+      letter-spacing: 0.01em;
+    }
+
+    .pg-title .mark { color: var(--accent); }
+
+    .pg-id {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--ink-soft);
+      word-break: break-all;
+    }
+
+    .pg-meta {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      color: var(--ink-soft);
+      text-align: right;
+    }
+
+    .pg-section-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--ink-soft);
+      margin: 0 0 10px;
+    }
+
+    .pg-paste {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-bottom: 26px;
+    }
+
+    .pg-textarea {
+      width: 100%;
+      box-sizing: border-box;
+      min-height: 96px;
+      resize: vertical;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      line-height: 1.5;
+      padding: 12px;
+      border: 1px solid var(--rule);
+      border-radius: 6px;
+      background: var(--bg-elev);
+      color: var(--ink);
+      outline: none;
+    }
+
+    .pg-textarea:focus { border-color: var(--accent); }
+
+    .pg-paste-row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .pg-btn {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      padding: 9px 16px;
+      border-radius: 6px;
+      border: 1px solid var(--rule);
+      background: var(--bg-elev);
+      color: var(--ink);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .pg-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+    .pg-btn.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    .pg-btn.primary:hover { background: var(--ink); border-color: var(--ink); color: #fff; }
+
+    .pg-msg {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      color: var(--ink-soft);
+      min-height: 16px;
+    }
+
+    .pg-msg.error { color: var(--accent); }
+
+    #pg-chart {
+      width: 100%;
+      height: 460px;
+      background: var(--bg-elev);
+      border: 1px solid var(--rule);
+      border-radius: 8px;
+    }
+
+    .pg-empty {
+      text-align: center;
+      padding: 60px 20px;
+      color: var(--ink-soft);
+    }
+
+    .pg-empty .pg-emoji { font-size: 40px; margin-bottom: 14px; }
+
+    .pg-rounds { margin-top: 30px; }
+
+    .pg-round {
+      border: 1px solid var(--rule);
+      border-radius: 8px;
+      background: var(--bg-elev);
+      margin-bottom: 14px;
+      overflow: hidden;
+    }
+
+    .pg-round-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 16px;
+      cursor: pointer;
+    }
+
+    .pg-round-head:hover { background: rgba(184, 92, 56, 0.05); }
+
+    .pg-round-name {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    .pg-round-stat {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--ink-soft);
+    }
+
+    .pg-mastered-tag {
+      color: var(--gcp);
+    }
+
+    .pg-round-body {
+      padding: 0 16px 14px;
+      display: none;
+    }
+
+    .pg-round.open .pg-round-body { display: block; }
+
+    .pg-wordgrid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 4px 16px;
+    }
+
+    .pg-word {
+      font-family: 'Newsreader', serif;
+      font-size: 14px;
+      padding: 3px 0;
+      border-bottom: 1px dotted var(--rule);
+    }
+
+    .pg-word.mastered { opacity: 0.55; }
+
+    .pg-word .en { font-weight: 500; }
+
+    .pg-word .zh { color: var(--ink-soft); margin-left: 8px; font-size: 13px; }
+
+    .pg-word .badge {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 9px;
+      color: var(--gcp);
+      margin-left: 6px;
+    }
+
+    .pg-round-del {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--ink-soft);
+      background: transparent;
+      border: 1px solid var(--rule);
+      border-radius: 4px;
+      padding: 4px 8px;
+      cursor: pointer;
+    }
+
+    .pg-round-del:hover { color: var(--accent); border-color: var(--accent); }
+
+    .pg-subhead {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--ink-soft);
+      margin: 14px 0 6px;
+    }
+
+    a.pg-home {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      color: var(--gcp);
+      text-decoration: none;
+    }
+
+    a.pg-home:hover { text-decoration: underline; }
+  </style>
+</head>
+
+<body>
+  <div class="pg-wrap">
+    <div class="pg-head">
+      <div>
+        <h1 class="pg-title"><span class="mark">背</span>单词进度</h1>
+        <div class="pg-id" id="pg-id">—</div>
+      </div>
+      <div>
+        <div class="pg-meta" id="pg-meta"></div>
+        <a class="pg-home" href="/lexica" target="_blank" rel="noopener">← 回到 Lexica</a>
+      </div>
+    </div>
+
+    <div class="pg-paste">
+      <div class="pg-section-label">粘贴 CSV（听写 / 认词导出）· 第一次 = 全集，之后每次 = 上一轮的子集</div>
+      <textarea id="pg-input" class="pg-textarea"
+        placeholder="English,Chinese&#10;&quot;abate&quot;,&quot;减轻&quot;&#10;&quot;cogent&quot;,&quot;有说服力的&quot;"
+        spellcheck="false"></textarea>
+      <div class="pg-paste-row">
+        <button id="pg-paste-btn" class="pg-btn primary">粘贴进新一轮</button>
+        <span class="pg-msg" id="pg-msg"></span>
+      </div>
+    </div>
+
+    <div class="pg-section-label">桑基图 · 单词随每轮收敛，掌握的词分叉出去</div>
+    <div id="pg-chart"></div>
+
+    <div class="pg-rounds" id="pg-rounds"></div>
+  </div>
+
+  <script src="/progress.js"></script>
+</body>
+
+</html>

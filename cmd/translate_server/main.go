@@ -158,6 +158,8 @@ func main() {
 	http.HandleFunc("/dictation/alphabet-words", dictationAlphabetWordsHandler())
 	http.HandleFunc("/clean", cleanHandler())
 	http.HandleFunc("/clean/sync", cleanSyncHandler())
+	http.HandleFunc("/progress/", progressHandler())
+	http.HandleFunc("/progress.js", lexicaAssetHandler("progress.js", "application/javascript; charset=utf-8"))
 
 	// Bind on all interfaces by default so other machines on the LAN can
 	// reach the server via this host's IP. Override with LISTEN_ADDR
