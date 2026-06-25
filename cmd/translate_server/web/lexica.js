@@ -1173,7 +1173,6 @@ function learnShowSetup() {
   <div class="setup-aux-row">
     <button class="dict-back-btn" id="learn-custom-btn">📂 自定义路径</button>
     <button class="dict-back-btn" id="learn-paste-csv-btn">📋 粘贴 CSV</button>
-    <button class="dict-back-btn" id="learn-history-btn">📜 历史会话</button>
   </div>
   <div class="dict-loading" id="learn-load-msg"></div>
 </div>
@@ -1229,9 +1228,6 @@ function learnShowSetup() {
   });
   $('learn-paste-csv-btn').addEventListener('click', () => {
     showPasteCSVScreen(learnBody, learnShowSetup, (words, label) => learnShowPortionPicker(words, label));
-  });
-  $('learn-history-btn').addEventListener('click', () => {
-    showSessionHistoryScreen(learnBody, (s) => s.mode === 'learn', learnShowSetup);
   });
 }
 
@@ -1321,7 +1317,6 @@ function learnShowQuestion() {
     return;
   }
 
-  fireStat('recog_word');
   const word = s.ordered[s.currentIdx];
   const total = s.ordered.length;
   const current = s.currentIdx + 1;
@@ -1499,15 +1494,6 @@ function learnShowSummary() {
   $('learn-home').addEventListener('click', learnReset);
   $('learn-title').textContent = '学习新词';
   setupSummaryReveal(learnBody);
-
-  saveSession({
-    mode: 'learn',
-    dayName: s.dayName,
-    goodLabel: '认识',
-    badLabel: '不认识',
-    goodWords: s.knownWords,
-    badWords: s.unknownWords,
-  });
 }
 
 function learnReset() {
@@ -1591,48 +1577,6 @@ function openRecognition() {
   $('recog-title').textContent = '认词模式';
   if (!recogState.words.length) {
     recogShowSetup();
-  }
-}
-
-// ---- Session history screen (shared by recognition + dictation) ----
-async function showSessionHistoryScreen(bodyEl, modeMatcher, onBack) {
-  bodyEl.innerHTML = `
-<div class="dict-setup">
-  <div class="dict-setup-label">最近 10 次记录</div>
-  <div class="session-list" id="session-list">加载中...</div>
-  <button class="dict-back-btn" id="session-back">← 返回</button>
-</div>
-  `;
-  bodyEl.querySelector('#session-back').addEventListener('click', onBack);
-  const listEl = bodyEl.querySelector('#session-list');
-  try {
-    const res = await fetch(`${apiBase()}/session/list`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const items = await res.json();
-    const filtered = modeMatcher ? items.filter(modeMatcher) : items;
-    if (!filtered.length) {
-      listEl.textContent = '暂无记录';
-      return;
-    }
-    listEl.innerHTML = filtered.map(item => {
-      const ts = String(item.timestamp || '').replace('T', ' ').replace(/\+.*$/, '');
-      const idEnc = encodeURIComponent(item.id);
-      const dlGood = item.goodCount > 0
-        ? `<a class="dict-csv-btn" href="${apiBase()}/session/csv?id=${idEnc}&kind=good" download>⬇ ${escapeHTML(item.goodLabel)} ${item.goodCount}</a>`
-        : '';
-      const dlBad = item.badCount > 0
-        ? `<a class="dict-csv-btn" href="${apiBase()}/session/csv?id=${idEnc}&kind=bad" download>⬇ ${escapeHTML(item.badLabel)} ${item.badCount}</a>`
-        : '';
-      return `<div class="session-item">
-  <div class="session-meta">
-    <span class="session-time">${escapeHTML(ts)}</span>
-    <span class="session-day">${escapeHTML(item.dayName || '')}</span>
-  </div>
-  <div class="dict-csv-row">${dlGood}${dlBad}</div>
-</div>`;
-    }).join('');
-  } catch (err) {
-    listEl.textContent = `❌ ${err.message}`;
   }
 }
 
@@ -1783,7 +1727,6 @@ function recogShowSetup() {
   <div class="setup-aux-row">
     <button class="dict-back-btn" id="recog-custom-btn">📂 自定义路径</button>
     <button class="dict-back-btn" id="recog-paste-csv-btn">📋 粘贴 CSV</button>
-    <button class="dict-back-btn" id="recog-history-btn">📜 历史会话</button>
   </div>
   <div class="dict-loading" id="recog-load-msg"></div>
 </div>
@@ -1839,9 +1782,6 @@ function recogShowSetup() {
   });
   $('recog-paste-csv-btn').addEventListener('click', () => {
     showPasteCSVScreen(recogBody, recogShowSetup, (words, label) => recogShowPortionPicker(words, label));
-  });
-  $('recog-history-btn').addEventListener('click', () => {
-    showSessionHistoryScreen(recogBody, (s) => s.mode === 'recognition', recogShowSetup);
   });
 }
 
@@ -1934,7 +1874,6 @@ function recogShowQuestion() {
     return;
   }
 
-  fireStat('recog_word');
   const word = s.shuffled[s.currentIdx];
   const total = s.shuffled.length;
   const current = s.currentIdx + 1;
@@ -2114,34 +2053,12 @@ function recogShowSummary() {
   $('recog-home').addEventListener('click', recogReset);
   $('recog-title').textContent = '认词模式';
   setupSummaryReveal(recogBody);
-
-  saveSession({
-    mode: 'recognition',
-    dayName: s.dayName,
-    goodLabel: '认识',
-    badLabel: '不认识',
-    goodWords: s.knownWords,
-    badWords: s.unknownWords,
-  });
 }
 
 function recogReset() {
   recogState = { words: [], shuffled: [], currentIdx: 0, knownWords: [], unknownWords: [], dayName: '', allWords: [], baseDayName: '' };
   $('recog-title').textContent = '认词模式';
   recogShowSetup();
-}
-
-async function saveSession(payload) {
-  if (!payload.goodWords.length && !payload.badWords.length) return;
-  try {
-    await fetch(`${apiBase()}/session/record`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-  } catch (err) {
-    console.warn('session save failed:', err);
-  }
 }
 
 // Drag support for dictation panel (same pattern as popup)
@@ -2247,7 +2164,6 @@ function dictShowSetup() {
   <div class="setup-aux-row">
     <button class="dict-back-btn" id="dict-custom-btn">📂 自定义路径</button>
     <button class="dict-back-btn" id="dict-paste-csv-btn">📋 粘贴 CSV</button>
-    <button class="dict-back-btn" id="dict-history-btn">📜 历史会话</button>
   </div>
   <div class="dict-loading" id="dict-load-msg"></div>
 </div>
@@ -2306,10 +2222,6 @@ function dictShowSetup() {
   });
   $('dict-paste-csv-btn').addEventListener('click', () => {
     showPasteCSVScreen(dictBody, dictShowSetup, (words, label) => dictShowPortionPicker(words, label));
-  });
-  $('dict-history-btn').addEventListener('click', () => {
-    const modes = dictVariantMeta().histModes;
-    showSessionHistoryScreen(dictBody, (s) => modes.includes(s.mode), dictShowSetup);
   });
 }
 
@@ -2453,20 +2365,7 @@ function dictPlayTTS(text) {
   audio.play().catch(err => console.warn('TTS play failed:', err));
   // Kick off preload if not in cache so future plays are instant
   if (!cached) preloadTTS(text);
-  fireStat('tts_play');
   return audio;
-}
-
-// Fire-and-forget daily counter bump
-function fireStat(type, count) {
-  try {
-    fetch(`${apiBase()}/stats/inc`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type, count: count || 1 }),
-      keepalive: true,
-    }).catch(() => {});
-  } catch (_) { /* silent */ }
 }
 
 // ---- Question Screen ----
@@ -2482,7 +2381,6 @@ function dictShowQuestion() {
   // advanced = 听音频拼英文：不显示中文，进入即自动播放
   const isAdv = s.variant === 'advanced';
 
-  fireStat('dict_word');
   const word = s.shuffled[s.currentIdx];
   const total = s.shuffled.length;
   const current = s.currentIdx + 1;
@@ -2583,9 +2481,6 @@ function dictShowQuestion() {
       return;
     }
 
-    // Any non-empty, non-bye submission counts as one input
-    fireStat('dict_input');
-
     if (ans.toLowerCase() === word.english.toLowerCase()) {
       // Correct!
       answerInput.classList.add('correct');
@@ -2656,7 +2551,6 @@ function dictShowQuestionUltimate() {
     return;
   }
 
-  fireStat('dict_word');
   const word = s.shuffled[s.currentIdx];
   const total = s.shuffled.length;
   const current = s.currentIdx + 1;
@@ -2737,7 +2631,6 @@ function dictShowQuestionUltimate() {
       if (e.key === 'Enter') {
         e.preventDefault();
         if (answerInput.value.trim().toLowerCase() === 'bye') { dictShowSummary(); return; }
-        fireStat('dict_input');
         reveal();
       }
       return;
@@ -2804,16 +2697,6 @@ function dictShowSummary() {
   const s = dictState;
   const meta = DICT_VARIANTS[s.variant] || DICT_VARIANTS.basic;
   const practiced = s.correctWords.length + s.incorrectWords.length;
-
-  // Persist a session record (fire-and-forget)
-  saveSession({
-    mode: meta.mode,
-    dayName: s.dayName,
-    goodLabel: meta.goodLabel,
-    badLabel: meta.badLabel,
-    goodWords: s.correctWords,
-    badWords: s.incorrectWords,
-  });
 
   if (practiced === 0) {
     dictBody.innerHTML = `
@@ -3035,494 +2918,10 @@ scalePanel(popup, 420, 16);
   ro.observe(learnPanel);
 }
 
-
-// ========================================================
-//  Study Time Tracker — silent background timer
-//  • Records "active" segments while the user interacts
-//  • 60s of no activity → close the segment
-//  • Heartbeat to backend every 30s so long sessions survive crashes
-//  • Day boundary is midnight UTC+8 (handled server-side)
-// ========================================================
-(function setupStudyTimeTracker() {
-  const IDLE_MS = 60 * 1000;
-  const HEARTBEAT_MS = 30 * 1000;
-  const THROTTLE_MS = 1000;
-
-  let activeStart = null;
-  let lastActivity = null;
-  let idleTimer = null;
-  let heartbeatTimer = null;
-  let lastFire = 0;
-  let paused = false;
-
-  function postSegment(start, end, useBeacon) {
-    if (!start || !end || end <= start) return;
-    const body = JSON.stringify({ start, end });
-    const url = `${apiBase()}/studytime/segment`;
-    try {
-      if (useBeacon && navigator.sendBeacon) {
-        navigator.sendBeacon(url, new Blob([body], { type: 'application/json' }));
-        return;
-      }
-      fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body,
-        keepalive: true,
-      }).catch(() => {});
-    } catch (err) { /* silent */ }
-  }
-
-  function startSession() {
-    activeStart = Date.now();
-    lastActivity = activeStart;
-    if (heartbeatTimer) clearInterval(heartbeatTimer);
-    heartbeatTimer = setInterval(() => {
-      if (activeStart && lastActivity) postSegment(activeStart, lastActivity);
-    }, HEARTBEAT_MS);
-  }
-
-  function stopSession(useBeacon) {
-    if (!activeStart || !lastActivity) return;
-    const start = activeStart;
-    // Extend segment to cover the full idle window — any activity within 1 min
-    // counts as continuous studying, so the idle cooldown is part of study time.
-    const end = Math.min(lastActivity + IDLE_MS, Date.now());
-    activeStart = null;
-    lastActivity = null;
-    if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
-    if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
-    postSegment(start, end, useBeacon);
-  }
-
-  function onActivity() {
-    if (paused) return;
-    const now = Date.now();
-    if (now - lastFire < THROTTLE_MS) return;
-    lastFire = now;
-
-    lastActivity = now;
-    if (!activeStart) startSession();
-    if (idleTimer) clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => stopSession(false), IDLE_MS);
-  }
-
-  ['mousemove', 'mousedown', 'keydown', 'wheel', 'touchstart'].forEach(evt => {
-    window.addEventListener(evt, onActivity, { passive: true });
-  });
-
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden) stopSession(false);
-  });
-  window.addEventListener('beforeunload', () => stopSession(true));
-  window.addEventListener('pagehide',     () => stopSession(true));
-
-  window.lexicaStudyTracker = {
-    pause() { paused = true; stopSession(false); },
-    resume() { paused = false; onActivity(); },
-  };
-
-  // Kick off immediately — loading the page counts as activity
-  onActivity();
-})();
-
-// ========================================================
-//  Idle Reminder — nag email after 10 min of no activity
-//  (only when the toggle is ON, a recipient email is set,
-//   and the page is still open in the browser)
-// ========================================================
-(function setupIdleReminder() {
-  const IDLE_REMINDER_MS = 10 * 60 * 1000;
-  const THROTTLE_MS = 1000;
-  let timer = null;
-  let fired = false;
-  let lastFire = 0;
-
-  // Migrate old 'reminder-enabled' boolean key to new 'reminder-state'
-  if (!localStorage.getItem('reminder-state') && localStorage.getItem('reminder-enabled') === 'false') {
-    localStorage.setItem('reminder-state', 'resting');
-  }
-
-  // Public API for the bell + settings UI.
-  // State: 'enabled' (on + timer), 'resting' (off + timer paused), 'elsewhere' (off + timer running)
-  window.lexicaReminder = {
-    getState: () => localStorage.getItem('reminder-state') || 'enabled',
-    isEnabled() { return this.getState() === 'enabled'; },
-    setState(state) {
-      localStorage.setItem('reminder-state', state);
-      if (state === 'enabled') {
-        schedule();
-        window.lexicaStudyTracker?.resume();
-      } else if (state === 'resting') {
-        cancel();
-        window.lexicaStudyTracker?.pause();
-      } else {
-        cancel(); // elsewhere: stop reminders, keep timer running
-      }
-      window.dispatchEvent(new CustomEvent('lexica:reminder-changed'));
-    },
-    setEnabled(v) { this.setState(v ? 'enabled' : 'resting'); },
-  };
-
-  function schedule() {
-    cancel();
-    if (!window.lexicaReminder?.isEnabled()) return;
-    fired = false;
-    timer = setTimeout(trigger, IDLE_REMINDER_MS);
-  }
-  function cancel() {
-    if (timer) { clearTimeout(timer); timer = null; }
-  }
-  function trigger() {
-    if (fired) return;
-    if (!window.lexicaReminder?.isEnabled()) return;
-    fired = true;
-    // Email reminders removed; the bell now only governs study-time tracking.
-  }
-
-  function bump() {
-    const now = Date.now();
-    if (now - lastFire < THROTTLE_MS) return;
-    lastFire = now;
-    schedule();
-  }
-
-  ['mousemove', 'mousedown', 'keydown', 'wheel', 'touchstart'].forEach(evt => {
-    window.addEventListener(evt, bump, { passive: true });
-  });
-  document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) schedule();
-  });
-  // Closing or unloading the page → naturally stop nagging
-  window.addEventListener('beforeunload', cancel);
-  window.addEventListener('pagehide',     cancel);
-
-  schedule();
-})();
-
-// ========================================================
-//  Study Time Indicator — clock icon (top-right) + modal chart
-// ========================================================
-(function setupStudyTimeIndicator() {
-  // --- Reminder bell button ---
-  const bell = document.createElement('button');
-  bell.id = 'reminder-bell-btn';
-  bell.className = 'reminder-bell-btn';
-
-  function updateBell() {
-    const state = window.lexicaReminder.getState();
-    if (state === 'enabled') {
-      bell.innerHTML = '🔔';
-      bell.title = '摸鱼提醒开启中 · 点击暂停';
-      bell.classList.remove('off');
-    } else if (state === 'resting') {
-      bell.innerHTML = '🔕';
-      bell.title = '休息中，不计时 · 点击恢复';
-      bell.classList.add('off');
-    } else {
-      bell.innerHTML = '🔕';
-      bell.title = '在别处学习，计时中 · 点击恢复';
-      bell.classList.add('off');
-    }
-  }
-
-  let bellDropdown = null;
-
-  function closeBellDropdown() {
-    if (bellDropdown) { bellDropdown.remove(); bellDropdown = null; }
-  }
-
-  bell.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const state = window.lexicaReminder.getState();
-    if (state !== 'enabled') {
-      closeBellDropdown();
-      window.lexicaReminder.setState('enabled');
-      return;
-    }
-    if (bellDropdown) { closeBellDropdown(); return; }
-
-    bellDropdown = document.createElement('div');
-    bellDropdown.className = 'reminder-dropdown';
-    bellDropdown.innerHTML = `
-      <button class="reminder-dropdown-opt" data-action="resting">☕ 休息了，暂停计时</button>
-      <button class="reminder-dropdown-opt" data-action="elsewhere">📚 去别处学，继续计时</button>
-    `;
-    const r = bell.getBoundingClientRect();
-    bellDropdown.style.top  = (r.bottom + 6) + 'px';
-    bellDropdown.style.right = (window.innerWidth - r.right) + 'px';
-    document.body.appendChild(bellDropdown);
-
-    bellDropdown.querySelectorAll('.reminder-dropdown-opt').forEach(btn => {
-      btn.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        window.lexicaReminder.setState(btn.dataset.action);
-        closeBellDropdown();
-      });
-    });
-
-    setTimeout(() => document.addEventListener('click', closeBellDropdown, { once: true }), 0);
-  });
-
-  window.addEventListener('lexica:reminder-changed', () => { updateBell(); closeBellDropdown(); });
-  updateBell();
-
-  // --- Stats clock button ---
-  const btn = document.createElement('button');
-  btn.id = 'study-clock-btn';
-  btn.className = 'study-clock-btn';
-  btn.title = '今日学习统计';
-  btn.setAttribute('aria-label', '今日学习统计');
-  btn.innerHTML = '⏱';
-
-  const ctrls = document.querySelector('header .controls');
-  if (ctrls) {
-    ctrls.appendChild(bell);
-    ctrls.appendChild(btn);
-  } else {
-    document.body.appendChild(bell);
-    document.body.appendChild(btn);
-  }
-
-  const modal = document.createElement('div');
-  modal.id = 'study-modal';
-  modal.className = 'study-modal hidden';
-  modal.innerHTML = `
-    <div class="study-modal-backdrop"></div>
-    <div class="study-modal-card">
-      <div class="study-modal-header">
-        <h3 id="study-modal-title">今日学习统计</h3>
-        <button class="study-modal-close" id="study-modal-close" title="关闭">✕</button>
-      </div>
-      <div class="study-modal-body" id="study-modal-body"></div>
-    </div>
-  `;
-  document.body.appendChild(modal);
-
-  function closeModal() { modal.classList.add('hidden'); }
-  function openModal()  { modal.classList.remove('hidden'); }
-
-  modal.querySelector('.study-modal-backdrop').addEventListener('click', closeModal);
-  modal.querySelector('#study-modal-close').addEventListener('click', closeModal);
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !modal.classList.contains('hidden')) closeModal();
-  });
-
-  btn.addEventListener('click', async () => {
-    openModal();
-    const body = $('study-modal-body');
-    body.innerHTML = '<div class="study-loading">加载中…</div>';
-    try {
-      const res = await fetch(`${apiBase()}/stats/today`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      // Normalize segments key (server returns studySegments)
-      data.segments = data.studySegments || data.segments || [];
-      data.totalMs = data.studyTimeMs || data.totalMs || 0;
-      renderStudyModal(body, data);
-    } catch (err) {
-      body.innerHTML = `<div class="study-error">❌ ${escapeHTML(err.message || String(err))}</div>`;
-    }
-  });
-
-  function pad(n) { return String(n).padStart(2, '0'); }
-  function fmtTime(ms) {
-    const d = new Date(ms);
-    return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  }
-  function fmtDuration(ms) {
-    const totalMin = Math.max(0, Math.round(ms / 60000));
-    const h = Math.floor(totalMin / 60);
-    const m = totalMin % 60;
-    if (h > 0) return `${h} 小时 ${m} 分`;
-    if (m > 0) return `${m} 分钟`;
-    const sec = Math.max(0, Math.round(ms / 1000));
-    return `${sec} 秒`;
-  }
-
-  // Midnight of `dateStr` (UTC+8 "YYYY-MM-DD") expressed in epoch ms
-  function midnightUTC8MsFor(dateStr) {
-    const [y, m, d] = dateStr.split('-').map(Number);
-    return Date.UTC(y, m - 1, d, 0, 0, 0) - 8 * 3600 * 1000;
-  }
-
-  function renderStudyModal(container, data) {
-    const total = data.totalMs || 0;
-    const segments = (data.segments || []).slice().sort((a, b) => a.start - b.start);
-    const dateStr = data.date || '';
-    const ttsPlays = data.ttsPlays || 0;
-    const dictInputs = data.dictInputs || 0;
-    const dictWords = data.dictWords || 0;
-    const recogWords = data.recogWords || 0;
-    const cleanedWords = data.cleanedWords || 0;
-
-    const settingsHTML = renderReminderSettings();
-
-    const emptyState = segments.length === 0 && ttsPlays === 0 && dictInputs === 0
-      && dictWords === 0 && recogWords === 0 && cleanedWords === 0;
-    if (emptyState) {
-      container.innerHTML = settingsHTML + `
-        <div class="study-empty">
-          <div class="study-empty-icon">📭</div>
-          <div>今天还没有学习记录</div>
-          <div class="study-empty-hint">操作页面就会自动计时，开始学习吧～</div>
-        </div>`;
-      bindReminderSettings(container);
-      return;
-    }
-
-    const statsGrid = `
-      <div class="study-stats-grid">
-        <div class="study-stat-card">
-          <div class="study-stat-card-icon">⏱</div>
-          <div class="study-stat-card-num">${fmtDuration(total)}</div>
-          <div class="study-stat-card-label">总学习时间</div>
-        </div>
-        <div class="study-stat-card">
-          <div class="study-stat-card-icon">🧹</div>
-          <div class="study-stat-card-num">${cleanedWords}</div>
-          <div class="study-stat-card-label">学会单词</div>
-        </div>
-        <div class="study-stat-card">
-          <div class="study-stat-card-icon">🔊</div>
-          <div class="study-stat-card-num">${ttsPlays}</div>
-          <div class="study-stat-card-label">听音频</div>
-        </div>
-        <div class="study-stat-card">
-          <div class="study-stat-card-icon">⌨️</div>
-          <div class="study-stat-card-num">${dictInputs}</div>
-          <div class="study-stat-card-label">听写输入</div>
-        </div>
-        <div class="study-stat-card">
-          <div class="study-stat-card-icon">✍️</div>
-          <div class="study-stat-card-num">${dictWords}</div>
-          <div class="study-stat-card-label">听写单词</div>
-        </div>
-        <div class="study-stat-card">
-          <div class="study-stat-card-icon">👁️</div>
-          <div class="study-stat-card-num">${recogWords}</div>
-          <div class="study-stat-card-label">认词数量</div>
-        </div>
-      </div>
-    `;
-
-    let timelineHTML = '';
-    if (segments.length > 0) {
-      const todayStartMs = midnightUTC8MsFor(dateStr);
-      const dayMs = 24 * 3600 * 1000;
-      const first = segments[0].start;
-      const last = segments[segments.length - 1].end;
-      const longest = segments.reduce((m, s) => Math.max(m, s.end - s.start), 0);
-
-      const svgW = 720;
-      const svgH = 64;
-      const padX = 28;
-      const usableW = svgW - padX * 2;
-
-      function xFor(ms) {
-        const pct = Math.max(0, Math.min(1, (ms - todayStartMs) / dayMs));
-        return padX + pct * usableW;
-      }
-
-      let segRects = '';
-      for (const s of segments) {
-        const x = xFor(s.start);
-        const w = Math.max(2, xFor(s.end) - x);
-        segRects += `<rect x="${x.toFixed(2)}" y="20" width="${w.toFixed(2)}" height="22" rx="3" fill="url(#study-grad)" />`;
-      }
-
-      let hourTicks = '';
-      let hourLabels = '';
-      for (let h = 0; h <= 24; h += 3) {
-        const x = padX + (h / 24) * usableW;
-        hourTicks += `<line x1="${x.toFixed(2)}" y1="42" x2="${x.toFixed(2)}" y2="48" stroke="rgba(255,255,255,0.25)" />`;
-        hourLabels += `<text x="${x.toFixed(2)}" y="60" text-anchor="middle" font-size="9" fill="rgba(255,255,255,0.55)" font-family="JetBrains Mono, monospace">${pad(h)}</text>`;
-      }
-
-      const nowMs = Date.now();
-      const inToday = nowMs >= todayStartMs && nowMs <= todayStartMs + dayMs;
-      const nowX = xFor(nowMs);
-      const nowMarker = inToday
-        ? `<line x1="${nowX.toFixed(2)}" y1="14" x2="${nowX.toFixed(2)}" y2="46" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="3,2" />
-           <text x="${nowX.toFixed(2)}" y="11" text-anchor="middle" font-size="9" fill="#fbbf24" font-family="JetBrains Mono, monospace">now</text>`
-        : '';
-
-      const segmentsList = segments.map((s) => {
-        const dur = s.end - s.start;
-        return `<div class="study-seg-row">
-          <span class="study-seg-time">${fmtTime(s.start)} → ${fmtTime(s.end)}</span>
-          <span class="study-seg-dur">${fmtDuration(dur)}</span>
-        </div>`;
-      }).join('');
-
-      timelineHTML = `
-        <div class="study-section-divider"></div>
-        <div class="study-bracket">
-          <span>🟢 ${fmtTime(first)} 首次活跃</span>
-          <span class="study-bracket-sep">·</span>
-          <span>🔚 ${fmtTime(last)} 最后活跃</span>
-          <span class="study-bracket-sep">·</span>
-          <span>📈 最长一段 ${fmtDuration(longest)}</span>
-        </div>
-        <svg class="study-chart" viewBox="0 0 ${svgW} ${svgH}" preserveAspectRatio="none">
-          <defs>
-            <linearGradient id="study-grad" x1="0" y1="0" x2="1" y2="0">
-              <stop offset="0%" stop-color="#a78bfa" />
-              <stop offset="100%" stop-color="#60a5fa" />
-            </linearGradient>
-          </defs>
-          <rect x="${padX}" y="24" width="${usableW}" height="14" rx="3" fill="rgba(255,255,255,0.05)" />
-          ${segRects}
-          ${hourTicks}
-          ${hourLabels}
-          ${nowMarker}
-        </svg>
-        <div class="study-chart-caption">24 小时时间轴（UTC+8）· 每个色块为一次活跃段</div>
-        <div class="study-seg-list">${segmentsList}</div>
-      `;
-    }
-
-    container.innerHTML = settingsHTML + statsGrid + timelineHTML;
-    bindReminderSettings(container);
-  }
-
-  function renderReminderSettings() {
-    const enabled = window.lexicaReminder.isEnabled();
-    return `
-      <div class="reminder-settings">
-        <div class="reminder-settings-row">
-          <label class="reminder-toggle">
-            <input type="checkbox" id="reminder-enabled-input" ${enabled ? 'checked' : ''}>
-            <span class="reminder-toggle-track"></span>
-            <span class="reminder-toggle-label">🔔 摸鱼提醒</span>
-          </label>
-          <span class="reminder-settings-hint">10 分钟没动作就给我自己发邮件</span>
-        </div>
-        <div class="reminder-settings-status" id="reminder-settings-status"></div>
-      </div>
-    `;
-  }
-
-  function bindReminderSettings(container) {
-    const toggleInput = container.querySelector('#reminder-enabled-input');
-    const statusEl = container.querySelector('#reminder-settings-status');
-    if (!toggleInput) return;
-    toggleInput.addEventListener('change', () => {
-      window.lexicaReminder.setEnabled(toggleInput.checked);
-      if (statusEl) {
-        statusEl.textContent = toggleInput.checked ? '✅ 提醒已开启' : '🛑 提醒已关闭';
-        statusEl.className = 'reminder-settings-status ' + (toggleInput.checked ? 'ok' : 'off');
-      }
-    });
-  }
-})();
-
-
 // ========================================================
 //  Sunrise / Sunset Wallpaper — ECharts-powered background board
 //  Sun trajectory from civil dawn → dusk (so we get a bit of
-//  pre-dawn and post-sunset), colored phase bands at the bottom,
-//  and today's study segments overlaid on their own contrast strip.
+//  pre-dawn and post-sunset), with colored phase bands at the bottom.
 // ========================================================
 (function setupSunWallpaper() {
   if (typeof echarts === 'undefined') {
@@ -3545,7 +2944,6 @@ scalePanel(popup, 420, 16);
       </div>
       <div class="sun-wallpaper-chart" id="sun-wallpaper-chart"></div>
       <div class="sun-wallpaper-footer">
-        <span class="sun-wallpaper-total" id="sun-wallpaper-total"></span>
         <span class="sun-wallpaper-hint">选中文字即朗读 · 翻译自动弹出 · 支持 txt · csv · md · pdf · docx · epub</span>
       </div>
     </div>
@@ -3554,23 +2952,17 @@ scalePanel(popup, 420, 16);
   const chartEl = $('sun-wallpaper-chart');
   const dateEl  = $('sun-wallpaper-date');
   const statEl  = $('sun-wallpaper-status');
-  const totalEl = $('sun-wallpaper-total');
 
   const chart = echarts.init(chartEl, null, { renderer: 'canvas' });
   window.addEventListener('resize', () => chart.resize());
 
   let sunData = null;
-  let statsData = null;
   let rerenderTimer = null;
 
   async function load() {
     try {
-      const [sunRes, statsRes] = await Promise.all([
-        fetch(`${apiBase()}/sun/today`),
-        fetch(`${apiBase()}/stats/today`).catch(() => null),
-      ]);
-      if (sunRes && sunRes.ok) sunData = await sunRes.json();
-      if (statsRes && statsRes.ok) statsData = await statsRes.json();
+      const res = await fetch(`${apiBase()}/sun/today`);
+      if (res && res.ok) sunData = await res.json();
       paint();
     } catch (err) {
       console.warn('[sun-wallpaper] load failed', err);
@@ -3652,25 +3044,14 @@ scalePanel(popup, 420, 16);
       statEl.textContent = `🌌 入夜 · 日落于 ${fmtTime(sunsetMs)}`;
     }
 
-    const totalMs  = statsData ? (statsData.studyTimeMs || 0) : 0;
-    const segCount = statsData ? (statsData.studySegments || []).length : 0;
-    if (totalMs > 0) {
-      totalEl.innerHTML = `今日学习累计 <strong>${fmtMinutes(totalMs)}</strong>` +
-        (segCount ? ` · ${segCount} 段` : '');
-    } else {
-      totalEl.textContent = '';
-    }
-
-    const segments = (statsData && statsData.studySegments) || [];
-
     // Y-axis layout: arc peak at y=1, but we open the scale up to y=3 so the
     // arc only takes the upper third → looks short and flat, leaving plenty
-    // of space below for the phase bands and study strip.
+    // of space below for the phase bands.
     const Y_MIN = -0.55;
     const Y_MAX = 3.0;
-    // Y-band for phase color strip and study segments (below horizon)
-    const STUDY_Y_TOP = -0.18;
-    const STUDY_Y_BOT = -0.46;
+    // Y-band for the phase color strip (below horizon)
+    const PHASE_Y_TOP = -0.18;
+    const PHASE_Y_BOT = -0.46;
 
     chart.setOption({
       backgroundColor: 'transparent',
@@ -3711,33 +3092,33 @@ scalePanel(popup, 420, 16);
             itemStyle: { opacity: 0.78 },
             data: [
               // Night / astro twilight (before dawn)
-              [{ xAxis: todayStartMs, yAxis: STUDY_Y_BOT,
+              [{ xAxis: todayStartMs, yAxis: PHASE_Y_BOT,
                  itemStyle: { color: 'rgba(11,16,41,0.55)' } },
-               { xAxis: dawnMs,       yAxis: STUDY_Y_TOP }],
+               { xAxis: dawnMs,       yAxis: PHASE_Y_TOP }],
               // Civil dawn
-              [{ xAxis: dawnMs,    yAxis: STUDY_Y_BOT,
+              [{ xAxis: dawnMs,    yAxis: PHASE_Y_BOT,
                  itemStyle: { color: 'rgba(76,29,149,0.55)' } },
-               { xAxis: sunriseMs, yAxis: STUDY_Y_TOP }],
+               { xAxis: sunriseMs, yAxis: PHASE_Y_TOP }],
               // Golden morning
-              [{ xAxis: sunriseMs,       yAxis: STUDY_Y_BOT,
+              [{ xAxis: sunriseMs,       yAxis: PHASE_Y_BOT,
                  itemStyle: { color: 'rgba(251,146,60,0.55)' } },
-               { xAxis: goldenMorningMs, yAxis: STUDY_Y_TOP }],
+               { xAxis: goldenMorningMs, yAxis: PHASE_Y_TOP }],
               // Day
-              [{ xAxis: goldenMorningMs, yAxis: STUDY_Y_BOT,
+              [{ xAxis: goldenMorningMs, yAxis: PHASE_Y_BOT,
                  itemStyle: { color: 'rgba(125,211,252,0.45)' } },
-               { xAxis: goldenEveningMs, yAxis: STUDY_Y_TOP }],
+               { xAxis: goldenEveningMs, yAxis: PHASE_Y_TOP }],
               // Golden evening
-              [{ xAxis: goldenEveningMs, yAxis: STUDY_Y_BOT,
+              [{ xAxis: goldenEveningMs, yAxis: PHASE_Y_BOT,
                  itemStyle: { color: 'rgba(249,115,22,0.55)' } },
-               { xAxis: sunsetMs,        yAxis: STUDY_Y_TOP }],
+               { xAxis: sunsetMs,        yAxis: PHASE_Y_TOP }],
               // Civil dusk
-              [{ xAxis: sunsetMs, yAxis: STUDY_Y_BOT,
+              [{ xAxis: sunsetMs, yAxis: PHASE_Y_BOT,
                  itemStyle: { color: 'rgba(124,45,18,0.55)' } },
-               { xAxis: duskMs,   yAxis: STUDY_Y_TOP }],
+               { xAxis: duskMs,   yAxis: PHASE_Y_TOP }],
               // Night again
-              [{ xAxis: duskMs,      yAxis: STUDY_Y_BOT,
+              [{ xAxis: duskMs,      yAxis: PHASE_Y_BOT,
                  itemStyle: { color: 'rgba(11,16,41,0.55)' } },
-               { xAxis: todayEndMs,  yAxis: STUDY_Y_TOP }]
+               { xAxis: todayEndMs,  yAxis: PHASE_Y_TOP }]
             ]
           },
           z: 1
@@ -3854,37 +3235,6 @@ scalePanel(popup, 420, 16);
             formatter: `黄昏 ${fmtTime(duskMs)}`
           },
           data: [[duskMs, 0]]
-        },
-        // ---- Study segments with their own dark contrast strip ----
-        {
-          type: 'custom',
-          z: 6,
-          silent: true,
-          renderItem: (params, api) => {
-            const start = api.value(0);
-            const end   = api.value(1);
-            const x0 = api.coord([start, 0])[0];
-            const x1 = api.coord([end,   0])[0];
-            // Sit just inside the phase band, with a hint of glow above it
-            const y  = api.coord([start, STUDY_Y_TOP])[1] - 6;
-            const w  = Math.max(2, x1 - x0);
-            return {
-              type: 'rect',
-              shape: { x: x0, y, width: w, height: 12, r: 3 },
-              style: {
-                fill: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
-                  { offset: 0, color: '#e9d5ff' },
-                  { offset: 1, color: '#bfdbfe' }
-                ]),
-                stroke: 'rgba(15,12,41,0.8)',
-                lineWidth: 1,
-                shadowBlur: 10,
-                shadowColor: 'rgba(15,12,41,0.6)'
-              }
-            };
-          },
-          encode: { x: [0, 1] },
-          data: segments.map(s => [s.start, s.end])
         }
       ]
     });

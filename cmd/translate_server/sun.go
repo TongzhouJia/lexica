@@ -17,6 +17,12 @@ import (
 // mainland China, so the kixorz/suncalc library handles the math.
 // ---------------------------------------------------------------------------
 
+// utc8Date formats t as a YYYY-MM-DD calendar date in UTC+8.
+func utc8Date(t time.Time) string {
+	loc := time.FixedZone("UTC+8", 8*60*60)
+	return t.In(loc).Format("2006-01-02")
+}
+
 func sunLocation() (lat, lon float64) {
 	lat, lon = 39.9042, 116.4074 // Beijing default
 	if v := strings.TrimSpace(os.Getenv("SUN_LAT")); v != "" {
