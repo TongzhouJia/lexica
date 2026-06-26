@@ -75,6 +75,9 @@
         <button class="sidebar-tab" id="tab-recog" title="认词·看英文标认识">
           <span class="tab-icon">👁️</span>认词
         </button>
+        <button class="sidebar-tab" id="tab-study" title="学词·中英文同时显示 · 空格/回车下一个">
+          <span class="tab-icon">🔖</span>学词
+        </button>
         <button class="sidebar-tab" id="tab-cleaner" title="清理单词">
           <span class="tab-icon">🧹</span>清理单词
         </button>
@@ -126,6 +129,17 @@
             style="font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:8px;">
             认词模式</div>
           <div style="font-size:13px;line-height:1.6;">看到英文，标记认识或不认识。</div>
+        </div>
+      </div>
+
+      <!-- Tab: Study (browse) info -->
+      <div class="sidebar-content hidden" id="sidebar-study-info">
+        <div style="text-align:center;padding:32px 12px;color:var(--ink-soft);">
+          <div style="font-size:32px;margin-bottom:12px;">🔖</div>
+          <div
+            style="font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:8px;">
+            学词</div>
+          <div style="font-size:13px;line-height:1.6;">中英文同时显示，空格或回车看下一个，按 R 朗读。不计成绩。</div>
         </div>
       </div>
 
@@ -213,6 +227,19 @@
       </div>
     </div>
     <div id="recog-body">
+      <!-- Screens injected by JS -->
+    </div>
+  </div>
+
+  <!-- Study Panel -->
+  <div id="study-panel">
+    <div id="study-header">
+      <div id="study-title">学词</div>
+      <div class="popup-actions">
+        <button id="study-close-btn" class="icon-only" title="关闭">✕</button>
+      </div>
+    </div>
+    <div id="study-body">
       <!-- Screens injected by JS -->
     </div>
   </div>
