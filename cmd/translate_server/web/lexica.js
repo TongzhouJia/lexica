@@ -3327,7 +3327,7 @@ scalePanel(popup, 420, 16);
 //  Sun trajectory from civil dawn → dusk (so we get a bit of
 //  pre-dawn and post-sunset), with colored phase bands at the bottom.
 // ========================================================
-(function setupSunWallpaper() {
+function renderSunBackground() {
   if (typeof echarts === 'undefined') {
     console.warn('[sun-wallpaper] ECharts not loaded');
     return;
@@ -3364,6 +3364,9 @@ scalePanel(popup, 420, 16);
   let rerenderTimer = null;
 
   async function load() {
+    // Bail if the user has since switched to another background — the host
+    // element may have been replaced, so painting would be wasted or error.
+    if (currentBackground !== 'sun') return;
     try {
       const res = await fetch(`${apiBase()}/sun/today`);
       if (res && res.ok) sunData = await res.json();
@@ -3649,4 +3652,175 @@ scalePanel(popup, 420, 16);
 
   setTimeout(() => chart.resize(), 50);
   load();
-})();
+}
+
+// ========================================================
+//  Home-screen background switcher
+//  Two boards render into #status (the empty-state area in <main>):
+//    'sun'     — sunrise/sunset wallpaper (default)
+//    'letters' — 26-letter check-in progress tracker
+//  Choice persists in localStorage; a sidebar button switches between them.
+// ========================================================
+const BG_KEY = 'lexica-bg';
+let currentBackground = 'sun';
+
+const BG_OPTIONS = [
+  { id: 'sun',     icon: '🌅', label: '日出日落' },
+  { id: 'letters', icon: '🔤', label: '字母进度' },
+];
+
+function applyBackground(name) {
+  currentBackground = (name === 'letters') ? 'letters' : 'sun';
+  try { localStorage.setItem(BG_KEY, currentBackground); } catch (_) {}
+
+  const host = $('status');
+  const mainEl = document.querySelector('main');
+  if (!host || !mainEl) return;
+
+  // Only the empty-state board lives in #status; if a document is open we
+  // still render (into the hidden host) so it's ready, but make the board
+  // visible again when nothing is loaded.
+  const docOpen = contentEl && contentEl.style.display === 'block';
+  if (!docOpen) host.style.display = 'block';
+
+  if (currentBackground === 'letters') {
+    mainEl.classList.add('sun-bleed');
+    host.classList.remove('sun-host');
+    host.classList.add('letter-host');
+    renderLetterBackground(host);
+  } else {
+    host.classList.remove('letter-host');
+    renderSunBackground(); // re-adds sun-bleed + sun-host and paints
+  }
+  updateBgPickerLabel();
+}
+
+// ---- Letter check-in tracker (ported 1:1 from the React artifact) ----
+const LETTER_DATA = [
+  { letter: 'A', words: 377 }, { letter: 'B', words: 184 },
+  { letter: 'C', words: 530 }, { letter: 'D', words: 344 },
+  { letter: 'E', words: 283 }, { letter: 'F', words: 204 },
+  { letter: 'G', words: 114 }, { letter: 'H', words: 156 },
+  { letter: 'I', words: 299 }, { letter: 'J', words: 22 },
+  { letter: 'K', words: 12 },  { letter: 'L', words: 122 },
+  { letter: 'M', words: 234 }, { letter: 'N', words: 67 },
+  { letter: 'O', words: 124 }, { letter: 'P', words: 334 },
+  { letter: 'Q', words: 14 },  { letter: 'R', words: 253 },
+  { letter: 'S', words: 500 }, { letter: 'T', words: 197 },
+  { letter: 'U', words: 80 },  { letter: 'V', words: 91 },
+  { letter: 'W', words: 74 },  { letter: 'X', words: 0 },
+  { letter: 'Y', words: 4 },   { letter: 'Z', words: 6 },
+];
+
+const LT_TOTAL = LETTER_DATA.reduce((sum, item) => sum + item.words, 0);
+
+const LT_ICON_CHECK = '<svg class="lt-icon checked" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="m9 12 2 2 4-4"></path></svg>';
+const LT_ICON_CIRCLE = '<svg class="lt-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle></svg>';
+
+function renderLetterBackground(host) {
+  let checked = {};
+  try { checked = JSON.parse(localStorage.getItem('wordTrackerProgress') || '{}') || {}; } catch (_) { checked = {}; }
+
+  function save() {
+    try { localStorage.setItem('wordTrackerProgress', JSON.stringify(checked)); } catch (_) {}
+  }
+
+  function paint() {
+    const done = LETTER_DATA.reduce((sum, item) => sum + (checked[item.letter] ? item.words : 0), 0);
+    const pct = LT_TOTAL === 0 ? '0' : ((done / LT_TOTAL) * 100).toFixed(1);
+
+    const cards = LETTER_DATA.map(({ letter, words }) => {
+      const isChecked = !!checked[letter];
+      const isZero = words === 0;
+      const icon = isZero ? '' : (isChecked ? LT_ICON_CHECK : LT_ICON_CIRCLE);
+      const cls = 'lt-card' + (isChecked ? ' checked' : '') + (isZero ? ' zero' : '');
+      return `<div class="${cls}" data-letter="${letter}">
+        <div class="lt-card-top">
+          <span class="lt-letter">${letter}</span>
+          ${icon}
+        </div>
+        <div class="lt-count">${words} 词</div>
+      </div>`;
+    }).join('');
+
+    host.innerHTML = `
+<div class="lt-board">
+  <div class="lt-header-card">
+    <div class="lt-header-row">
+      <div>
+        <h1 class="lt-title">9天单词通关打卡</h1>
+        <p class="lt-sub">每日精准卡点，彻底消灭字母尾巴</p>
+      </div>
+      <button class="lt-reset" id="lt-reset">重置进度</button>
+    </div>
+    <div class="lt-progress-row">
+      <div class="lt-pct">${pct}%</div>
+      <div class="lt-fraction">已完成 ${done} / <span class="lt-total">${LT_TOTAL} 词</span></div>
+    </div>
+    <div class="lt-bar"><div class="lt-bar-fill" style="width:${pct}%"></div></div>
+  </div>
+  <div class="lt-grid">${cards}</div>
+  <div class="lt-footer">点击上方字母卡片进行打卡，进度将自动保存。</div>
+</div>
+    `;
+
+    host.querySelectorAll('.lt-card').forEach(el => {
+      el.addEventListener('click', () => {
+        const L = el.dataset.letter;
+        const item = LETTER_DATA.find(x => x.letter === L);
+        if (!item || item.words === 0) return;
+        checked[L] = !checked[L];
+        save();
+        paint();
+      });
+    });
+    const resetBtn = host.querySelector('#lt-reset');
+    if (resetBtn) resetBtn.addEventListener('click', () => {
+      if (window.confirm('确定要清空所有进度重新开始吗？')) { checked = {}; save(); paint(); }
+    });
+  }
+
+  paint();
+}
+
+// ---- Sidebar background picker ----
+function updateBgPickerLabel() {
+  const labelEl = $('bg-picker-label');
+  if (labelEl) {
+    const opt = BG_OPTIONS.find(o => o.id === currentBackground) || BG_OPTIONS[0];
+    labelEl.textContent = opt.label;
+  }
+  document.querySelectorAll('.bg-picker-opt').forEach(b => {
+    b.classList.toggle('active', b.dataset.bg === currentBackground);
+  });
+}
+
+function setupBackgroundPicker() {
+  const btn = $('bg-picker-btn');
+  const menu = $('bg-picker-menu');
+  if (!btn || !menu) return;
+
+  function closeMenu() { menu.classList.add('hidden'); }
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    menu.classList.toggle('hidden');
+  });
+  menu.querySelectorAll('.bg-picker-opt').forEach(opt => {
+    opt.addEventListener('click', (e) => {
+      e.stopPropagation();
+      applyBackground(opt.dataset.bg);
+      closeMenu();
+    });
+  });
+  document.addEventListener('click', (e) => {
+    if (!menu.classList.contains('hidden') && !menu.contains(e.target) && e.target !== btn) closeMenu();
+  });
+
+  // Initial background from saved choice (default: sun).
+  let saved = 'sun';
+  try { saved = localStorage.getItem(BG_KEY) || 'sun'; } catch (_) {}
+  applyBackground(saved);
+}
+
+setupBackgroundPicker();
