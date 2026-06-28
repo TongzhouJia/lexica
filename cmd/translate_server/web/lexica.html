@@ -47,6 +47,8 @@
       </label>
       <input type="file" id="file-input" accept=".txt,.csv,.md,.markdown,.pdf,.docx,.epub" hidden>
       <button id="load-btn" class="primary">打开文件</button>
+      <input type="file" id="table-file-input" accept=".md,.markdown" hidden>
+      <button id="table-read-btn" title="打开 Markdown 表格，用方向键移动高亮框自动朗读英文格">📊 表格朗读</button>
       <div class="recent-wrap">
         <button id="recent-btn" title="最近打开过的文件">最近 ▾</button>
         <div id="recent-menu" class="recent-menu hidden"></div>
@@ -198,8 +200,6 @@
           <span>txt</span><span>csv</span><span>md</span><span>pdf</span><span>docx</span><span>epub</span>
         </div>
       </div>
-
-      <div id="content"></div>
     </main>
   </div>
 
@@ -214,6 +214,20 @@
     </div>
     <iframe id="popup-frame" sandbox="allow-same-origin allow-scripts allow-popups"></iframe>
     <div id="popup-loading">查询中</div>
+  </div>
+
+  <!-- Reader Panel (opened files float here; background stays behind) -->
+  <div id="reader-panel">
+    <div id="reader-header">
+      <div id="reader-title">阅读</div>
+      <div class="popup-actions">
+        <button id="reader-close-btn" class="icon-only" title="关闭">✕</button>
+      </div>
+    </div>
+    <div id="reader-tablebar" class="hidden">↑↓←→ / hjkl 移动 · 空格=下 回车=上 · 英文格自动朗读 · R 重读 · Esc 退出</div>
+    <div id="reader-body">
+      <div id="content"></div>
+    </div>
   </div>
 
   <!-- Learn Panel -->

@@ -1256,6 +1256,114 @@ main.sun-bleed {
   color: var(--ink);
 }
 
+/* ========== READER PANEL (opened files float here, paper theme) ========== */
+#reader-panel {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 100;
+  background: var(--bg-elev);
+  border: 1px solid var(--paper-edge);
+  border-radius: 8px;
+  box-shadow:
+    0 20px 50px rgba(42, 37, 32, 0.20),
+    0 4px 12px rgba(42, 37, 32, 0.10),
+    0 0 0 1px rgba(255, 255, 255, 0.5) inset;
+  width: min(900px, 88vw);
+  min-width: 320px;
+  min-height: 300px;
+  max-width: calc(100vw - 32px);
+  height: min(760px, 86vh);
+  max-height: calc(100vh - 32px);
+  display: none;
+  flex-direction: column;
+  overflow: hidden;
+  resize: both;
+  transform-origin: center;
+  animation: popCenter 0.22s cubic-bezier(0.34, 1.4, 0.64, 1);
+  color: var(--ink);
+}
+
+#reader-panel.visible {
+  display: flex;
+}
+
+#reader-panel.dragging {
+  animation: none;
+}
+
+#reader-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--bg);
+  gap: 12px;
+  cursor: move;
+  user-select: none;
+  touch-action: none;
+}
+
+#reader-panel.dragging #reader-header {
+  cursor: grabbing;
+}
+
+#reader-title {
+  font-family: 'Instrument Serif', 'Source Han Serif SC', serif;
+  font-style: italic;
+  font-size: 20px;
+  color: var(--accent);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  flex: 1;
+  line-height: 1.2;
+}
+
+#reader-tablebar {
+  padding: 7px 16px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+  background: var(--gcp-soft);
+  border-bottom: 1px solid var(--rule);
+  flex-shrink: 0;
+}
+
+#reader-body {
+  flex: 1;
+  overflow: auto;
+  padding: 24px 28px;
+}
+
+#reader-panel #content {
+  max-width: none;
+  margin: 0;
+}
+
+.reader-loading {
+  color: var(--ink-soft);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 14px;
+  text-align: center;
+  padding: 40px 0;
+}
+
+.reader-loading.error {
+  color: var(--accent);
+}
+
+/* Table reader cursor box (arrow-key navigation) */
+.tr-cell-active {
+  outline: 3px solid var(--gcp);
+  outline-offset: -3px;
+  background: var(--gcp-soft) !important;
+  scroll-margin: 24px;
+}
+
 /* ========== POPUP ========== */
 #popup {
   position: fixed;
@@ -2692,7 +2800,8 @@ main.sun-bleed {
 @media (max-width: 600px) {
   #recognition-panel,
   #learn-panel,
-  #study-panel {
+  #study-panel,
+  #reader-panel {
     top: 50%;
     left: 50%;
     width: calc(100vw - 16px);

@@ -37,8 +37,15 @@ const apiBase = () => apiUrlInput.value.trim().replace(/\/+$/, '');
 // ========================================================
 const fileInput = $('file-input');
 const loadBtn = $('load-btn');
+const tableFileInput = $('table-file-input');
+const tableReadBtn = $('table-read-btn');
 const statusEl = $('status');
 const contentEl = $('content');
+const readerPanel = $('reader-panel');
+const readerHeader = $('reader-header');
+const readerBody = $('reader-body');
+const readerTablebar = $('reader-tablebar');
+const readerCloseBtn = $('reader-close-btn');
 const gcsPrefixEl = $('gcs-prefix');
 const gcsStatusEl = $('gcs-status');
 const gcsListEl = $('gcs-list');
@@ -51,7 +58,17 @@ let activeGCSName = '';
 let openGCSFolders = new Set(JSON.parse(localStorage.getItem('lexica.gcs.openFolders') || '[]'));
 
 loadBtn.addEventListener('click', () => fileInput.click());
+tableReadBtn.addEventListener('click', () => tableFileInput.click());
 gcsRefreshBtn.addEventListener('click', refreshGCSFiles);
+
+tableFileInput.addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  activeGCSName = '';
+  await openReaderFile(file, file.name, { tableNav: true });
+  recordRecentFile('local:' + file.name);
+  tableFileInput.value = '';
+});
 
 // ---- Recently opened files (re-openable GCS paths only) ----
 const RECENT_KEY = 'lexica.recentFiles';
@@ -133,15 +150,6 @@ fileInput.addEventListener('change', async (e) => {
   recordRecentFile('local:' + file.name);
   fileInput.value = '';
 });
-
-function showStatus(msg, isError) {
-  statusEl.style.display = 'block';
-  contentEl.style.display = 'none';
-  statusEl.innerHTML = `
-<div class="hint-ornament">${isError ? '✕' : '◐ ◓ ◑ ◒'}</div>
-<h2 class="hint-title" style="${isError ? 'color: var(--accent)' : ''}">${escapeHTML(msg)}</h2>
-  `;
-}
 
 function escapeHTML(s) {
   return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -268,20 +276,153 @@ async function readFileAsHTML(file, sourceName) {
   return { html, mode };
 }
 
-async function openReaderFile(file, label) {
-  showStatus(`读取中  ${label}`);
+// Opens a file into the floating reader panel. The home-screen background
+// (#status) stays visible behind it. With { tableNav:true } the rendered table
+// becomes arrow-key navigable with auto-read (Markdown table reader).
+async function openReaderFile(file, label, opts = {}) {
+  const tableNav = !!opts.tableNav;
+  exitTableNav();
+
+  // Show the panel over the background; other mode panels step aside.
+  dictPanel.classList.remove('visible');
+  learnPanel.classList.remove('visible');
+  recogPanel.classList.remove('visible');
+  studyPanel.classList.remove('visible');
+  readerPanel.classList.add('visible');
+  readerTablebar.classList.toggle('hidden', !tableNav);
+  $('reader-title').textContent = label;
+  contentEl.style.display = 'block';
+  contentEl.removeAttribute('data-mode');
+  contentEl.innerHTML = `<p class="reader-loading">读取中  ${escapeHTML(label)}</p>`;
 
   try {
     const result = await readFileAsHTML(file, label);
-    statusEl.style.display = 'none';
-    contentEl.style.display = 'block';
     contentEl.dataset.mode = result.mode;
     contentEl.innerHTML = result.html;
-    window.scrollTo(0, 0);
+    readerBody.scrollTop = 0;
+    if (tableNav) enterTableNav();
   } catch (err) {
     console.error(err);
-    showStatus(`读取失败: ${err.message}`, true);
+    contentEl.removeAttribute('data-mode');
+    contentEl.innerHTML = `<p class="reader-loading error">读取失败: ${escapeHTML(err.message)}</p>`;
   }
+}
+
+readerCloseBtn.addEventListener('click', () => {
+  exitTableNav();
+  readerPanel.classList.remove('visible');
+});
+
+// Drag support for reader panel (same pattern as the other panels)
+let readerDrag = null;
+
+function readerPlacePanel(left, top, width, height) {
+  const margin = 8;
+  const maxLeft = Math.max(margin, window.innerWidth - width - margin);
+  const maxTop = Math.max(margin, window.innerHeight - height - margin);
+  readerPanel.style.left = `${clamp(left, margin, maxLeft)}px`;
+  readerPanel.style.top = `${clamp(top, margin, maxTop)}px`;
+  readerPanel.style.right = 'auto';
+  readerPanel.style.bottom = 'auto';
+  readerPanel.style.transform = 'none';
+}
+
+readerHeader.addEventListener('pointerdown', (e) => {
+  if ((e.button !== undefined && e.button !== 0) || e.target.closest('button')) return;
+  const rect = readerPanel.getBoundingClientRect();
+  readerDrag = { offsetX: e.clientX - rect.left, offsetY: e.clientY - rect.top, width: rect.width, height: rect.height };
+  readerPanel.classList.add('dragging');
+  readerPanel.style.width = `${rect.width}px`;
+  readerPanel.style.height = `${rect.height}px`;
+  readerHeader.setPointerCapture(e.pointerId);
+  e.preventDefault();
+});
+
+readerHeader.addEventListener('pointermove', (e) => {
+  if (!readerDrag) return;
+  readerPlacePanel(e.clientX - readerDrag.offsetX, e.clientY - readerDrag.offsetY, readerDrag.width, readerDrag.height);
+  e.preventDefault();
+});
+
+function endReaderDrag(e) {
+  if (!readerDrag) return;
+  readerDrag = null;
+  readerPanel.classList.remove('dragging');
+  if (readerHeader.hasPointerCapture(e.pointerId)) readerHeader.releasePointerCapture(e.pointerId);
+}
+
+readerHeader.addEventListener('pointerup', endReaderDrag);
+readerHeader.addEventListener('pointercancel', endReaderDrag);
+
+// ---- Markdown table reader: arrow-key cursor box + auto-read English cells ----
+let tableNavState = null;
+
+function exitTableNav() {
+  if (!tableNavState) return;
+  window.removeEventListener('keydown', tableNavState.keyHandler);
+  tableNavState.cells.forEach(r => r.forEach(c => c.classList.remove('tr-cell-active')));
+  tableNavState = null;
+  readerTablebar.classList.add('hidden');
+}
+
+function enterTableNav() {
+  exitTableNav();
+  const table = contentEl.querySelector('table');
+  if (!table) {
+    flash('没找到表格', true);
+    readerTablebar.classList.add('hidden');
+    return;
+  }
+  const cells = Array.from(table.rows).map(r => Array.from(r.cells));
+  if (!cells.length || !cells[0].length) return;
+
+  const state = { cells, row: 0, col: 0, keyHandler: null };
+  tableNavState = state;
+  readerTablebar.classList.remove('hidden');
+
+  function highlight(read) {
+    state.cells.forEach(r => r.forEach(c => c.classList.remove('tr-cell-active')));
+    const cell = state.cells[state.row] && state.cells[state.row][state.col];
+    if (!cell) return;
+    cell.classList.add('tr-cell-active');
+    cell.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    if (read) {
+      const txt = (cell.textContent || '').trim();
+      if (/[A-Za-z]/.test(txt)) dictPlayTTS(txt); // English cells only; 中文/空格不读
+    }
+  }
+
+  function move(dr, dc) {
+    const row = clamp(state.row + dr, 0, state.cells.length - 1);
+    const col = clamp(state.col + dc, 0, state.cells[row].length - 1);
+    state.row = row;
+    state.col = col;
+    highlight(true);
+  }
+
+  state.keyHandler = (e) => {
+    if (!readerPanel.classList.contains('visible')) return;
+    if (isEditableTarget(e.target)) return;
+    switch (e.key) {
+      case 'ArrowUp':    e.preventDefault(); move(-1, 0); break;
+      case 'ArrowDown':  e.preventDefault(); move(1, 0); break;
+      case 'ArrowLeft':  e.preventDefault(); move(0, -1); break;
+      case 'ArrowRight': e.preventDefault(); move(0, 1); break;
+      // Extra shortcuts: Space = down, Enter = up
+      case ' ':          e.preventDefault(); move(1, 0); break;
+      case 'Enter':      e.preventDefault(); move(-1, 0); break;
+      // Vim keys: h/j/k/l = left/down/up/right
+      case 'h': case 'H': e.preventDefault(); move(0, -1); break;
+      case 'j': case 'J': e.preventDefault(); move(1, 0); break;
+      case 'k': case 'K': e.preventDefault(); move(-1, 0); break;
+      case 'l': case 'L': e.preventDefault(); move(0, 1); break;
+      case 'Escape':     e.preventDefault(); exitTableNav(); break;
+      case 'r': case 'R': e.preventDefault(); highlight(true); break;
+      default: break;
+    }
+  };
+  window.addEventListener('keydown', state.keyHandler);
+  highlight(true);
 }
 
 contentEl.addEventListener('click', (e) => {
@@ -435,7 +576,15 @@ function formatSize(bytes) {
 async function openGCSFile(name) {
   activeGCSName = name;
   renderGCSList(gcsFiles);
-  showStatus(`读取中  ${name}`);
+
+  // Show the reader panel with a loading state while the blob downloads.
+  exitTableNav();
+  readerPanel.classList.add('visible');
+  readerTablebar.classList.add('hidden');
+  $('reader-title').textContent = name;
+  contentEl.removeAttribute('data-mode');
+  contentEl.style.display = 'block';
+  contentEl.innerHTML = `<p class="reader-loading">读取中  ${escapeHTML(name)}</p>`;
 
   try {
     const res = await fetch(`${apiBase()}/gcs/download?name=${encodeURIComponent(name)}`);
@@ -450,7 +599,8 @@ async function openGCSFile(name) {
     recordRecentFile(name);
   } catch (err) {
     console.error(err);
-    showStatus(`读取失败: ${err.message}`, true);
+    contentEl.removeAttribute('data-mode');
+    contentEl.innerHTML = `<p class="reader-loading error">读取失败: ${escapeHTML(err.message)}</p>`;
   }
 }
 
@@ -875,6 +1025,8 @@ function openDictation(variant = 'basic') {
   learnPanel.classList.remove('visible');
   recogPanel.classList.remove('visible');
   studyPanel.classList.remove('visible');
+  exitTableNav();
+  readerPanel.classList.remove('visible');
 
   // Switching to a different variant starts a fresh session.
   if (changed) dictResetState();
@@ -1154,6 +1306,8 @@ function openLearn() {
   dictPanel.classList.remove('visible');
   recogPanel.classList.remove('visible');
   studyPanel.classList.remove('visible');
+  exitTableNav();
+  readerPanel.classList.remove('visible');
   $('learn-title').textContent = '学习新词';
   if (!learnState.words.length) {
     learnShowSetup();
@@ -1581,6 +1735,8 @@ function openRecognition() {
   dictPanel.classList.remove('visible');
   learnPanel.classList.remove('visible');
   studyPanel.classList.remove('visible');
+  exitTableNav();
+  readerPanel.classList.remove('visible');
   $('recog-title').textContent = '认词模式';
   if (!recogState.words.length) {
     recogShowSetup();
@@ -2153,6 +2309,8 @@ function openStudy() {
   dictPanel.classList.remove('visible');
   learnPanel.classList.remove('visible');
   recogPanel.classList.remove('visible');
+  exitTableNav();
+  readerPanel.classList.remove('visible');
   $('study-title').textContent = '学词';
   if (!studyState.words.length) {
     studyShowSetup();
@@ -3677,11 +3835,9 @@ function applyBackground(name) {
   const mainEl = document.querySelector('main');
   if (!host || !mainEl) return;
 
-  // Only the empty-state board lives in #status; if a document is open we
-  // still render (into the hidden host) so it's ready, but make the board
-  // visible again when nothing is loaded.
-  const docOpen = contentEl && contentEl.style.display === 'block';
-  if (!docOpen) host.style.display = 'block';
+  // Files now open in the floating reader panel, so the background board in
+  // #status is always visible (behind any panel).
+  host.style.display = 'block';
 
   if (currentBackground === 'letters') {
     mainEl.classList.add('sun-bleed');
