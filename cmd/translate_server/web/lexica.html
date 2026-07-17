@@ -25,10 +25,15 @@
 
 <body>
 
+  <div id="lang-transition-overlay" aria-hidden="true">
+    <div class="lang-transition-ring"></div>
+    <div class="lang-transition-text" id="lang-transition-text"></div>
+  </div>
+
   <header>
-    <h1 class="brand">
-      <span class="mark">L</span>exica
-      <span class="subtitle">— select to read</span>
+    <h1 class="brand" id="brand-logo" title="点击切换 英中 / 日语 学习模式">
+      <span class="mark">L</span><span id="brand-name">exica</span>
+      <span class="subtitle" id="brand-subtitle">— select to read</span>
     </h1>
     <div class="controls">
       <div class="ctrl">
@@ -59,9 +64,6 @@
   <div class="app-shell">
     <aside class="library" aria-label="Navigation">
       <div class="sidebar-tabs">
-        <button class="sidebar-tab" id="tab-files" title="Study English">
-          <span class="tab-icon">📚</span>文件
-        </button>
         <button class="sidebar-tab" id="tab-dict-strict" title="听写·基础 · 看中文拼英文">
           <span class="tab-icon">✍️</span>听写·基础
         </button>
@@ -80,12 +82,6 @@
         <button class="sidebar-tab" id="tab-study" title="学词·中英文同时显示 · 空格/回车下一个">
           <span class="tab-icon">🔖</span>学词
         </button>
-        <button class="sidebar-tab" id="tab-cleaner" title="清理单词">
-          <span class="tab-icon">🧹</span>清理单词
-        </button>
-        <button class="sidebar-tab" id="tab-progress" title="背单词进度 · 桑基图">
-          <span class="tab-icon">📊</span>进度
-        </button>
       </div>
 
       <!-- Home-screen background picker -->
@@ -97,19 +93,6 @@
           <button class="bg-picker-opt" data-bg="sun">🌅 日出日落</button>
           <button class="bg-picker-opt" data-bg="letters">🔤 字母进度</button>
         </div>
-      </div>
-
-      <!-- Tab 1: GCS Files -->
-      <div class="sidebar-content hidden" id="sidebar-files">
-        <div class="library-head">
-          <h2 class="library-title">
-            GCP Files
-            <span id="gcs-prefix" class="library-prefix">study-english/</span>
-          </h2>
-          <button id="gcs-refresh" class="library-refresh" title="刷新 GCP 文件">刷新</button>
-        </div>
-        <div id="gcs-status" class="library-status">连接中...</div>
-        <div id="gcs-list" class="library-list"></div>
       </div>
 
       <!-- Tab 2 & 3: Dictation info -->
@@ -130,7 +113,7 @@
           <div
             style="font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:8px;">
             学习新词</div>
-          <div style="font-size:13px;line-height:1.6;">按原始顺序逐词过，标记认识或不认识。</div>
+          <div style="font-size:13px;line-height:1.6;" id="sidebar-learn-desc">按原始顺序逐词过，标记认识或不认识。</div>
         </div>
       </div>
 
@@ -141,7 +124,7 @@
           <div
             style="font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:8px;">
             认词模式</div>
-          <div style="font-size:13px;line-height:1.6;">看到英文，标记认识或不认识。</div>
+          <div style="font-size:13px;line-height:1.6;" id="sidebar-recog-desc">看到英文，标记认识或不认识。</div>
         </div>
       </div>
 
@@ -152,37 +135,8 @@
           <div
             style="font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:8px;">
             学词</div>
-          <div style="font-size:13px;line-height:1.6;">中英文同时显示，空格或回车看下一个，按 R 朗读。不计成绩。</div>
+          <div style="font-size:13px;line-height:1.6;" id="sidebar-study-desc">中英文同时显示，空格或回车看下一个，按 R 朗读。不计成绩。</div>
         </div>
-      </div>
-
-      <!-- Tab: Loop (links to standalone /loop page) -->
-      <!-- Tab 5: Cleaner -->
-      <div class="sidebar-content hidden" id="sidebar-cleaner">
-        <div class="library-head">
-          <h2 class="library-title">清理单词</h2>
-        </div>
-        <div style="display:flex; flex-direction:column; gap:12px; margin-top:12px;">
-          <textarea id="cleaner-input" placeholder="输入要清理的单词，用逗号分隔，或直接粘贴结算页复制的 CSV..."
-            style="width:100%; height:80px; resize:vertical; font-family:'JetBrains Mono',monospace; font-size:13px; padding:10px; border:1px solid var(--rule); border-radius:4px; background:var(--bg-elev); color:var(--ink); outline:none;"></textarea>
-          <div style="display:flex; gap:8px;">
-            <button id="cleaner-btn" class="primary" style="flex:1; font-size:13px; padding:10px;">确认清理（本地 + 云端）</button>
-          </div>
-          <div id="cleaner-status" style="font-size:12px; color:var(--ink-soft); min-height:18px;"></div>
-        </div>
-      </div>
-
-      <!-- Tab: Progress (Sankey) — list of tracked wordlists -->
-      <div class="sidebar-content hidden" id="sidebar-progress">
-        <div class="library-head">
-          <h2 class="library-title">背单词进度</h2>
-          <button id="progress-refresh" class="library-refresh" title="刷新">刷新</button>
-        </div>
-        <div style="font-size:12px; color:var(--ink-soft); line-height:1.5;">
-          每个进度一个独立页面，在新标签页打开。粘贴听写/认词导出的 CSV，第一次=全集，之后每次=子集，掌握的词会分叉出去。
-        </div>
-        <button id="progress-new" class="primary" style="font-size:13px; padding:9px;">➕ 新建进度</button>
-        <div id="progress-list" class="library-list"></div>
       </div>
 
     </aside>

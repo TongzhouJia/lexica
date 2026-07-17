@@ -25,12 +25,141 @@ loadSettings();
 
 apiUrlInput.addEventListener('change', () => {
   localStorage.setItem('lexica.apiUrl', apiUrlInput.value);
-  refreshGCSFiles();
 });
 delayInput.addEventListener('change', () => localStorage.setItem('lexica.delay', delayInput.value));
 autoplayChk.addEventListener('change', () => localStorage.setItem('lexica.autoplay', autoplayChk.checked ? '1' : '0'));
 
 const apiBase = () => apiUrlInput.value.trim().replace(/\/+$/, '');
+
+// ========================================================
+//  Language mode — English/Chinese reader ↔ Japanese (新标日)
+// ========================================================
+// Click the "Lexica" brand logo to flip modes. The four practice tabs
+// (听写·基础/进阶/终极, 新词, 认词, 学词) are shared between languages —
+// only the word source and audio playback differ. Japanese word objects
+// use the same {english, chinese} wire shape as English ones (see
+// JapaneseWord in japanese.go) plus extra `.kana` and `.audio` fields, so
+// almost every downstream render/score/playback function works unchanged;
+// see playWordAudio() further down for the local-mp3-vs-TTS branch.
+let appLang = localStorage.getItem('lexica.lang') === 'ja' ? 'ja' : 'en';
+
+const JAPANESE_CATEGORIES = [
+  { id: '1_全汉字词', label: '全汉字词' },
+  { id: '4_平假名汉字混合词', label: '假名汉字混合词' },
+  { id: '2_全平假名词', label: '全平假名词' },
+  { id: '3_全片假名词', label: '全片假名词' },
+];
+
+// Shared Japanese setup screen: a flat grid of the 4 word categories
+// (instead of the English "21 days" grid). onPicked(words, label) receives
+// the full category word list — same contract as the English day buttons —
+// so it plugs directly into each module's existing *ShowPortionPicker.
+function renderJapaneseSetup(bodyEl, promptText, onPicked) {
+  // Built with createElement (not innerHTML + id lookup) so this never
+  // collides with the same-named setup screen in another panel — all four
+  // practice tabs call this, and duplicate ids across hidden panels are a
+  // real footgun (id-based lookups can silently resolve to the wrong panel).
+  bodyEl.innerHTML = '';
+  const wrap = document.createElement('div');
+  wrap.className = 'dict-setup';
+
+  const label = document.createElement('div');
+  label.className = 'dict-setup-label';
+  label.textContent = promptText;
+  wrap.appendChild(label);
+
+  const grid = document.createElement('div');
+  grid.className = 'dict-day-grid';
+  wrap.appendChild(grid);
+
+  const loadMsg = document.createElement('div');
+  loadMsg.className = 'dict-loading';
+  wrap.appendChild(loadMsg);
+
+  bodyEl.appendChild(wrap);
+
+  JAPANESE_CATEGORIES.forEach(cat => {
+    const btn = document.createElement('button');
+    btn.className = 'dict-day-btn';
+    btn.style.minWidth = '96px';
+    btn.textContent = cat.label;
+    btn.addEventListener('click', async () => {
+      Array.from(grid.children).forEach(b => b.disabled = true);
+      loadMsg.textContent = `正在加载 ${cat.label} ...`;
+      try {
+        const res = await fetch(`${apiBase()}/japanese/words?category=${encodeURIComponent(cat.id)}`);
+        if (!res.ok) throw new Error(`加载失败: ${cat.label}`);
+        const words = await res.json();
+        onPicked(words, cat.label);
+      } catch (err) {
+        loadMsg.textContent = `❌ ${err.message}`;
+        Array.from(grid.children).forEach(b => b.disabled = false);
+      }
+    });
+    grid.appendChild(btn);
+  });
+}
+
+const brandLogo = $('brand-logo');
+const brandName = $('brand-name');
+const brandSubtitle = $('brand-subtitle');
+const langOverlay = $('lang-transition-overlay');
+const langOverlayText = $('lang-transition-text');
+
+function applyLangUI() {
+  const isJA = appLang === 'ja';
+  brandName.textContent = isJA ? 'レキシカ' : 'exica';
+  brandSubtitle.textContent = isJA ? '— 新标日 · 汉字 / 假名' : '— select to read';
+  document.title = isJA ? 'レキシカ · 新标日学习' : 'Lexica · 选词即译';
+  document.body.classList.toggle('lang-ja', isJA);
+
+  const learnDesc = $('sidebar-learn-desc');
+  const recogDesc = $('sidebar-recog-desc');
+  const studyDesc = $('sidebar-study-desc');
+  if (learnDesc) learnDesc.textContent = isJA
+    ? '按原始顺序逐词过（全汉字词/假名汉字混合词/全平假名词/全片假名词），标记认识或不认识。'
+    : '按原始顺序逐词过，标记认识或不认识。';
+  if (recogDesc) recogDesc.textContent = isJA
+    ? '看到日语词，标记认识或不认识。'
+    : '看到英文，标记认识或不认识。';
+  if (studyDesc) studyDesc.textContent = isJA
+    ? '日语 + 中文同时显示，空格或回车看下一个，按 R 朗读音频并切换汉字/假名显示。不计成绩。'
+    : '中英文同时显示，空格或回车看下一个，按 R 朗读。不计成绩。';
+}
+
+// Switches the active language, resetting every practice module so its
+// setup screen re-renders against the new word source next time it opens.
+function setAppLang(lang) {
+  if (lang !== 'ja' && lang !== 'en') return;
+  appLang = lang;
+  localStorage.setItem('lexica.lang', lang);
+  applyLangUI();
+  dictReset();
+  learnReset();
+  recogReset();
+  studyReset();
+}
+
+brandLogo.addEventListener('click', () => {
+  const nextLang = appLang === 'ja' ? 'en' : 'ja';
+  const rect = brandLogo.getBoundingClientRect();
+  const ox = ((rect.left + rect.width / 2) / window.innerWidth * 100).toFixed(2) + '%';
+  const oy = ((rect.top + rect.height / 2) / window.innerHeight * 100).toFixed(2) + '%';
+  langOverlay.style.setProperty('--lang-ox', ox);
+  langOverlay.style.setProperty('--lang-oy', oy);
+  langOverlayText.textContent = nextLang === 'ja' ? 'レキシカ' : 'Lexica';
+
+  langOverlay.classList.remove('active');
+  void langOverlay.offsetWidth; // restart the CSS animation
+  langOverlay.classList.add('active');
+
+  // Swap the underlying language right as the wipe fully covers the
+  // screen — matches the langWipeIn animation duration in lexica.css.
+  setTimeout(() => setAppLang(nextLang), 480);
+  setTimeout(() => langOverlay.classList.remove('active'), 1000);
+});
+
+applyLangUI();
 
 // ========================================================
 //  File loading & format dispatch
@@ -46,25 +175,15 @@ const readerHeader = $('reader-header');
 const readerBody = $('reader-body');
 const readerTablebar = $('reader-tablebar');
 const readerCloseBtn = $('reader-close-btn');
-const gcsPrefixEl = $('gcs-prefix');
-const gcsStatusEl = $('gcs-status');
-const gcsListEl = $('gcs-list');
-const gcsRefreshBtn = $('gcs-refresh');
 const recentBtn = $('recent-btn');
 const recentMenu = $('recent-menu');
 
-let gcsFiles = [];
-let activeGCSName = '';
-let openGCSFolders = new Set(JSON.parse(localStorage.getItem('lexica.gcs.openFolders') || '[]'));
-
 loadBtn.addEventListener('click', () => fileInput.click());
 tableReadBtn.addEventListener('click', () => tableFileInput.click());
-gcsRefreshBtn.addEventListener('click', refreshGCSFiles);
 
 tableFileInput.addEventListener('change', async (e) => {
   const file = e.target.files[0];
   if (!file) return;
-  activeGCSName = '';
   await openReaderFile(file, file.name, { tableNav: true });
   recordRecentFile('local:' + file.name);
   tableFileInput.value = '';
@@ -144,8 +263,6 @@ fileInput.addEventListener('change', async (e) => {
   const file = e.target.files[0];
   if (!file) return;
 
-  activeGCSName = '';
-  renderGCSList(gcsFiles);
   await openReaderFile(file, file.name);
   recordRecentFile('local:' + file.name);
   fileInput.value = '';
@@ -153,6 +270,23 @@ fileInput.addEventListener('change', async (e) => {
 
 function escapeHTML(s) {
   return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// makeKanaToggler wires R-to-show-kana onto the element showing the Japanese
+// word: the kanji form is what's rendered by default, and each call flips the
+// text between it and `word.kana`. Pure-kana categories (and every English
+// word) have no separate reading, so it returns null and the caller keeps R
+// as replay-only.
+function makeKanaToggler(word, elId) {
+  if (!word || !word.kana || word.kana === word.english) return null;
+  const el = $(elId);
+  if (!el) return null;
+  let showingKana = false;
+  return () => {
+    showingKana = !showingKana;
+    el.textContent = showingKana ? word.kana : word.english;
+    el.classList.toggle('word-as-kana', showingKana);
+  };
 }
 
 function renderMarkdown(text, sourceName) {
@@ -433,123 +567,6 @@ contentEl.addEventListener('click', (e) => {
   openGCSFile(link.dataset.gcsName);
 });
 
-function setGCSStatus(msg, isError) {
-  gcsStatusEl.textContent = msg;
-  gcsStatusEl.classList.toggle('error', Boolean(isError));
-}
-
-async function refreshGCSFiles() {
-  setGCSStatus('加载中...');
-  gcsListEl.innerHTML = '';
-
-  try {
-    const res = await fetch(`${apiBase()}/gcs/list`);
-    if (!res.ok) {
-      const body = (await res.text()).trim();
-      throw new Error(body || `HTTP ${res.status}`);
-    }
-
-    const payload = await res.json();
-    gcsFiles = Array.isArray(payload) ? payload : (payload.files || []);
-    if (!Array.isArray(payload) && payload.prefix) {
-      gcsPrefixEl.textContent = payload.prefix;
-      gcsPrefixEl.title = payload.prefix;
-    }
-
-    renderGCSList(gcsFiles);
-    setGCSStatus(gcsFiles.length ? `${gcsFiles.length} 个文件` : '没有文件');
-  } catch (err) {
-    console.error(err);
-    gcsFiles = [];
-    renderGCSList(gcsFiles);
-    setGCSStatus(`读取失败: ${err.message}`, true);
-  }
-}
-
-function renderGCSList(files) {
-  gcsListEl.innerHTML = '';
-  const tree = buildGCSFileTree(files);
-  renderGCSNode(tree, gcsListEl, 0);
-}
-
-function buildGCSFileTree(files) {
-  const root = { name: '', path: '', dirs: new Map(), files: [] };
-  for (const file of files) {
-    const parts = String(file.name || '').split('/').filter(Boolean);
-    if (!parts.length) continue;
-
-    let node = root;
-    let path = '';
-    for (const part of parts.slice(0, -1)) {
-      path += part + '/';
-      if (!node.dirs.has(part)) {
-        node.dirs.set(part, { name: part, path, dirs: new Map(), files: [] });
-      }
-      node = node.dirs.get(part);
-    }
-    node.files.push(file);
-  }
-  return root;
-}
-
-function renderGCSNode(node, container, depth) {
-  const dirs = [...node.dirs.values()].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
-  for (const dir of dirs) {
-    const details = document.createElement('details');
-    details.className = 'library-folder';
-    details.open = depth === 0 || openGCSFolders.has(dir.path) || hasActiveDescendant(dir);
-
-    const summary = document.createElement('summary');
-    summary.title = dir.path;
-    summary.innerHTML = `
-  <span class="library-folder-name">${escapeHTML(dir.name)}</span>
-  <span class="library-count">${countFiles(dir)}</span>
-`;
-
-    const children = document.createElement('div');
-    children.className = 'library-folder-children';
-    renderGCSNode(dir, children, depth + 1);
-
-    details.addEventListener('toggle', () => {
-      if (details.open) openGCSFolders.add(dir.path);
-      else openGCSFolders.delete(dir.path);
-      localStorage.setItem('lexica.gcs.openFolders', JSON.stringify([...openGCSFolders]));
-    });
-
-    details.append(summary, children);
-    container.appendChild(details);
-  }
-
-  const nodeFiles = [...node.files].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
-  for (const file of nodeFiles) {
-    const item = document.createElement('button');
-    item.type = 'button';
-    item.className = 'library-item' + (file.name === activeGCSName ? ' active' : '');
-    item.title = file.name;
-    item.innerHTML = `
-  <span class="library-name">${escapeHTML(baseName(file.name))}</span>
-  <span class="library-meta">${formatSize(file.size)}</span>
-`;
-    item.addEventListener('click', () => openGCSFile(file.name));
-    container.appendChild(item);
-  }
-}
-
-function countFiles(node) {
-  let count = node.files.length;
-  for (const child of node.dirs.values()) count += countFiles(child);
-  return count;
-}
-
-function hasActiveDescendant(node) {
-  if (!activeGCSName) return false;
-  if (node.files.some(file => file.name === activeGCSName)) return true;
-  for (const child of node.dirs.values()) {
-    if (hasActiveDescendant(child)) return true;
-  }
-  return false;
-}
-
 function baseName(path) {
   const parts = String(path).split('/').filter(Boolean);
   return parts[parts.length - 1] || path;
@@ -560,23 +577,10 @@ function dirName(path) {
   return idx >= 0 ? path.slice(0, idx + 1) : '';
 }
 
-function formatSize(bytes) {
-  if (!Number.isFinite(bytes)) return '';
-  if (bytes < 1024) return `${bytes} B`;
-  const units = ['KB', 'MB', 'GB'];
-  let size = bytes / 1024;
-  let unit = units.shift();
-  while (size >= 1024 && units.length) {
-    size /= 1024;
-    unit = units.shift();
-  }
-  return `${size.toFixed(size >= 10 ? 0 : 1)} ${unit}`;
-}
-
+// Opens a file stored on GCS directly by object name (used by recent-file
+// menu entries and by relative links/images inside rendered Markdown —
+// the sidebar file browser itself has been removed).
 async function openGCSFile(name) {
-  activeGCSName = name;
-  renderGCSList(gcsFiles);
-
   // Show the reader panel with a loading state while the blob downloads.
   exitTableNav();
   readerPanel.classList.add('visible');
@@ -946,22 +950,16 @@ const dictBody = $('dict-body');
 const dictCloseBtn = $('dict-close-btn');
 
 // Sidebar tabs
-const tabFiles = $('tab-files');
 const tabDictStrict = $('tab-dict-strict');
 const tabDictAdvanced = $('tab-dict-advanced');
 const tabDictUltimate = $('tab-dict-ultimate');
 const tabLearn = $('tab-learn');
 const tabRecog = $('tab-recog');
 const tabStudy = $('tab-study');
-const tabCleaner = $('tab-cleaner');
-const tabProgress = $('tab-progress');
-const sidebarFiles = $('sidebar-files');
 const sidebarDictInfo = $('sidebar-dict-info');
 const sidebarLearnInfo = $('sidebar-learn-info');
 const sidebarRecogInfo = $('sidebar-recog-info');
 const sidebarStudyInfo = $('sidebar-study-info');
-const sidebarCleaner = $('sidebar-cleaner');
-const sidebarProgress = $('sidebar-progress');
 const sidebarDictLabel = $('sidebar-dict-mode-label');
 const sidebarDictDesc = $('sidebar-dict-mode-desc');
 
@@ -975,8 +973,19 @@ const DICT_VARIANTS = {
   advanced: { title: '听写·进阶', label: '听写·进阶', desc: '听音频，拼出英文单词（不显示中文）。',   mode: 'dictation_advanced', histModes: ['dictation_advanced'],                  goodLabel: '正确', badLabel: '错误', goodTitle: '🌟 一次拼对', badTitle: '⚠️ 需要重点复习' },
   ultimate: { title: '听写·终极', label: '听写·终极', desc: '听音频，写出中文意思，自己判定对错。',   mode: 'dictation_ultimate', histModes: ['dictation_ultimate'],                  goodLabel: '记对了', badLabel: '记错了', goodTitle: '✓ 记对了', badTitle: '✗ 记错了' },
 };
+// Same three variants, Japanese-flavored copy (typing target is the
+// Japanese word — kanji or kana, whatever the CSV's "english" field holds —
+// instead of an English spelling).
+const DICT_VARIANTS_JA = {
+  basic:    { title: '听写·基础', label: '听写·基础', desc: '看中文，写出日语单词。',                  mode: 'dictation_strict',   histModes: ['dictation_strict', 'dictation_skip'], goodLabel: '正确', badLabel: '错误', goodTitle: '🌟 一次拼对', badTitle: '⚠️ 需要重点复习' },
+  advanced: { title: '听写·进阶', label: '听写·进阶', desc: '听音频，写出日语单词（不显示中文）。',     mode: 'dictation_advanced', histModes: ['dictation_advanced'],                  goodLabel: '正确', badLabel: '错误', goodTitle: '🌟 一次拼对', badTitle: '⚠️ 需要重点复习' },
+  ultimate: { title: '听写·终极', label: '听写·终极', desc: '听音频，写出中文意思，自己判定对错。',     mode: 'dictation_ultimate', histModes: ['dictation_ultimate'],                  goodLabel: '记对了', badLabel: '记错了', goodTitle: '✓ 记对了', badTitle: '✗ 记错了' },
+};
 let dictVariant = 'basic';
-function dictVariantMeta() { return DICT_VARIANTS[dictVariant] || DICT_VARIANTS.basic; }
+function dictVariantMeta() {
+  const table = appLang === 'ja' ? DICT_VARIANTS_JA : DICT_VARIANTS;
+  return table[dictVariant] || table.basic;
+}
 
 let dictState = {
   words: [],
@@ -994,18 +1003,15 @@ let dictState = {
 };
 
 function setActiveTab(tab) {
-  [tabFiles, tabDictStrict, tabDictAdvanced, tabDictUltimate, tabLearn, tabRecog, tabStudy, tabCleaner, tabProgress].forEach(t => t.classList.remove('active'));
+  [tabDictStrict, tabDictAdvanced, tabDictUltimate, tabLearn, tabRecog, tabStudy].forEach(t => t.classList.remove('active'));
   if (tab) tab.classList.add('active');
 }
 
 function showSidebarContent(which) {
-  sidebarFiles.classList.toggle('hidden', which !== 'files');
   sidebarDictInfo.classList.toggle('hidden', which !== 'dict');
   sidebarLearnInfo.classList.toggle('hidden', which !== 'learn');
   sidebarRecogInfo.classList.toggle('hidden', which !== 'recog');
   sidebarStudyInfo.classList.toggle('hidden', which !== 'study');
-  sidebarCleaner.classList.toggle('hidden', which !== 'cleaner');
-  sidebarProgress.classList.toggle('hidden', which !== 'progress');
 }
 
 const dictTabFor = { basic: tabDictStrict, advanced: tabDictAdvanced, ultimate: tabDictUltimate };
@@ -1036,196 +1042,12 @@ function openDictation(variant = 'basic') {
   }
 }
 
-let gcsLoaded = false;
-
-tabFiles.addEventListener('click', () => {
-  setActiveTab(tabFiles);
-  showSidebarContent('files');
-  dictPanel.classList.remove('visible');
-  if (!gcsLoaded) {
-    gcsLoaded = true;
-    refreshGCSFiles();
-  }
-});
-
 tabDictStrict.addEventListener('click', () => openDictation('basic'));
 tabDictAdvanced.addEventListener('click', () => openDictation('advanced'));
 tabDictUltimate.addEventListener('click', () => openDictation('ultimate'));
 tabLearn.addEventListener('click', () => openLearn());
 tabRecog.addEventListener('click', () => openRecognition());
 tabStudy.addEventListener('click', () => openStudy());
-
-tabCleaner.addEventListener('click', () => {
-  setActiveTab(tabCleaner);
-  showSidebarContent('cleaner');
-  dictPanel.classList.remove('visible');
-});
-
-
-// Parse cleaner input: supports both comma-separated words ("apple, banana")
-// and CSV format copied from dictation/recognition result pages:
-//   English,Chinese
-//   "word","翻译"
-//   ...
-function parseCleanerInput(raw) {
-  const trimmed = raw.replace(/^\uFEFF/, '').trim();
-  if (!trimmed) return '';
-
-  const lines = trimmed.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-
-  // Detect CSV format: first line is header "English,Chinese" (case-insensitive),
-  // or every line looks like "word","translation"
-  const headerRe = /^english\s*,\s*chinese$/i;
-  const quotedRowRe = /^"([^"]*)"(?:\s*,\s*"[^"]*")*$/;
-
-  let isCSV = false;
-  let startIdx = 0;
-
-  if (lines.length >= 2 && headerRe.test(lines[0])) {
-    isCSV = true;
-    startIdx = 1; // skip header
-  } else if (lines.length >= 1 && lines.every(l => quotedRowRe.test(l))) {
-    isCSV = true;
-    startIdx = 0;
-  }
-
-  if (isCSV) {
-    const words = [];
-    for (let i = startIdx; i < lines.length; i++) {
-      const match = lines[i].match(quotedRowRe);
-      if (match && match[1].trim()) {
-        words.push(match[1].trim());
-      } else {
-        // Fallback: try unquoted first field
-        const first = lines[i].split(',')[0].replace(/"/g, '').trim();
-        if (first && first.toLowerCase() !== 'english') {
-          words.push(first);
-        }
-      }
-    }
-    return words.join(',');
-  }
-
-  // Not CSV — treat as comma-separated words (original behavior)
-  return trimmed;
-}
-
-// One click cleans locally, then immediately syncs the change to the cloud.
-$('cleaner-btn').addEventListener('click', async () => {
-  const raw = $('cleaner-input').value.trim();
-  if (!raw) return;
-  const input = parseCleanerInput(raw);
-  if (!input) return;
-
-  const btn = $('cleaner-btn');
-  btn.disabled = true;
-  btn.textContent = '清理中...';
-  $('cleaner-status').textContent = '';
-
-  try {
-    const res = await fetch('/clean', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ words: input })
-    });
-    if (!res.ok) throw new Error('本地清理失败');
-    const data = await res.json();
-    $('cleaner-input').value = '';
-    $('cleaner-status').textContent = `本地清理 ${data.cleaned} 个单词，同步云端中...`;
-
-    const syncRes = await fetch('/clean/sync', { method: 'POST' });
-    if (!syncRes.ok) throw new Error('云端同步失败');
-    const syncData = await syncRes.json();
-    $('cleaner-status').textContent = `✅ 本地清理 ${data.cleaned} 个单词，云端同步了 ${syncData.synced} 个文件。`;
-  } catch (err) {
-    $('cleaner-status').textContent = `❌ ${err.message}，请重试。`;
-    console.error(err);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = '确认清理（本地 + 云端）';
-  }
-});
-
-// ---- Progress (Sankey) sidebar: list of tracked wordlists ----
-// Each entry opens its own standalone page /progress/<uuid> in a new tab.
-function progressOpen(id) {
-  window.open(`/progress/${encodeURIComponent(id)}`, '_blank', 'noopener');
-}
-
-function progressFmtDate(iso) {
-  try {
-    const d = new Date(iso);
-    if (isNaN(d)) return iso || '';
-    const p = n => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
-  } catch { return iso || ''; }
-}
-
-async function refreshProgressList() {
-  const host = $('progress-list');
-  host.innerHTML = '<div class="library-status">加载中…</div>';
-  try {
-    const res = await fetch('/progress/list');
-    if (!res.ok) throw new Error('加载失败');
-    const items = await res.json();
-    if (!items.length) {
-      host.innerHTML = '<div class="library-status">还没有进度，点上面「新建」开始。</div>';
-      return;
-    }
-    host.innerHTML = '';
-    for (const it of items) {
-      const row = document.createElement('div');
-      row.className = 'progress-item';
-      const shortId = it.id.slice(0, 8);
-      const stat = it.roundCount
-        ? `${it.roundCount} 轮 · ${it.totalWords}→${it.remaining}`
-        : '空 · 还没粘过';
-      row.innerHTML = `
-        <button class="progress-open" title="在新标签页打开">
-          <span class="progress-uuid">${shortId}…</span>
-          <span class="progress-sub">${stat} · ${progressFmtDate(it.createdAt)}</span>
-        </button>
-        <button class="progress-del" title="删除这个进度">✕</button>`;
-      row.querySelector('.progress-open').addEventListener('click', () => progressOpen(it.id));
-      row.querySelector('.progress-del').addEventListener('click', async (e) => {
-        e.stopPropagation();
-        if (!confirm(`删除进度 ${shortId}…？此操作不可撤销。`)) return;
-        await fetch(`/progress/delete?id=${encodeURIComponent(it.id)}`, { method: 'POST' });
-        refreshProgressList();
-      });
-      host.appendChild(row);
-    }
-  } catch (err) {
-    host.innerHTML = `<div class="library-status error">${err.message}</div>`;
-  }
-}
-
-tabProgress.addEventListener('click', () => {
-  setActiveTab(tabProgress);
-  showSidebarContent('progress');
-  dictPanel.classList.remove('visible');
-  learnPanel.classList.remove('visible');
-  recogPanel.classList.remove('visible');
-  refreshProgressList();
-});
-
-$('progress-new').addEventListener('click', async () => {
-  const btn = $('progress-new');
-  btn.disabled = true;
-  try {
-    const res = await fetch('/progress/create', { method: 'POST' });
-    if (!res.ok) throw new Error('创建失败');
-    const data = await res.json();
-    progressOpen(data.id);
-    refreshProgressList();
-  } catch (err) {
-    alert(err.message);
-  } finally {
-    btn.disabled = false;
-  }
-});
-
-$('progress-refresh').addEventListener('click', refreshProgressList);
 
 dictCloseBtn.addEventListener('click', () => {
   dictPanel.classList.remove('visible');
@@ -1316,6 +1138,10 @@ function openLearn() {
 
 // ---- Learn Setup Screen ----
 function learnShowSetup() {
+  if (appLang === 'ja') {
+    renderJapaneseSetup(learnBody, '学哪一类日语词？', (words, label) => learnShowPortionPicker(words, label));
+    return;
+  }
   learnBody.innerHTML = `
 <div class="dict-setup">
   <div class="dict-source-tabs">
@@ -1482,13 +1308,15 @@ function learnShowQuestion() {
   const current = s.currentIdx + 1;
   const pct = ((current - 1) / total * 100).toFixed(1);
 
+  const rHint = Boolean(word.kana && word.kana !== word.english) ? 'R=重听/假名' : 'R=重听';
+
   learnBody.innerHTML = `
 <div class="recog-question">
   <div class="recog-progress">${current} / ${total}</div>
   <div class="recog-progress-bar">
     <div class="recog-progress-fill" style="width: ${pct}%"></div>
   </div>
-  <div class="recog-english">${escapeHTML(word.english)}</div>
+  <div class="recog-english" id="learn-english">${escapeHTML(word.english)}</div>
   <button class="dict-play-btn recog-replay-btn" id="learn-replay-btn">🔊 重听</button>
   <div class="recog-reveal-row" id="learn-reveal-row" style="visibility:hidden">
     <span class="recog-chinese-reveal" id="learn-chinese">${escapeHTML(word.chinese)}</span>
@@ -1498,12 +1326,18 @@ function learnShowQuestion() {
     <button class="recog-no-btn" id="learn-no-btn">✗</button>
     <button class="recog-yes-btn" id="learn-yes-btn">✓</button>
   </div>
-  <div class="recog-hint" id="learn-hint">回车=认识 · 空格=不认识 · R=重听 · Esc=提前退出</div>
+  <div class="recog-hint" id="learn-hint">回车=认识 · 空格=不认识 · ${rHint} · Esc=提前退出</div>
   <button class="recog-exit-btn" id="learn-exit-btn">⏏ 提前退出</button>
 </div>
   `;
 
-  dictPlayTTS(word.english);
+  playWordAudio(word);
+
+  const toggleKana = makeKanaToggler(word, 'learn-english');
+  function replay() {
+    playWordAudio(word);
+    if (toggleKana) toggleKana();
+  }
 
   let revealed = false;
   let graded = false;
@@ -1527,7 +1361,7 @@ function learnShowQuestion() {
     `;
     $('learn-right-btn').addEventListener('click', () => grade(true));
     $('learn-wrong-btn').addEventListener('click', () => grade(false));
-    hintEl.textContent = '回车=认对 · 空格=认错 · R=重听 · Esc=提前退出';
+    hintEl.textContent = `回车=认对 · 空格=认错 · ${rHint} · Esc=提前退出`;
   }
 
   function grade(gotRight) {
@@ -1572,7 +1406,7 @@ function learnShowQuestion() {
   $('learn-yes-btn').addEventListener('click', () => reveal(true));
   $('learn-no-btn').addEventListener('click',  () => reveal(false));
   $('learn-exit-btn').addEventListener('click', earlyExit);
-  replayBtn.addEventListener('click', () => dictPlayTTS(word.english));
+  replayBtn.addEventListener('click', replay);
   editBtn.addEventListener('click', editTranslation);
 
   function onKey(e) {
@@ -1584,7 +1418,7 @@ function learnShowQuestion() {
       if (!revealed) reveal(false); else grade(false);
     } else if (e.key === 'r' || e.key === 'R') {
       e.preventDefault();
-      dictPlayTTS(word.english);
+      replay();
     } else if (e.key === 'Escape') {
       e.preventDefault();
       earlyExit();
@@ -1873,6 +1707,10 @@ function showPasteCSVScreen(bodyEl, onBack, onLoaded) {
 
 // ---- Recognition Setup Screen ----
 function recogShowSetup() {
+  if (appLang === 'ja') {
+    renderJapaneseSetup(recogBody, '认哪一类日语词？', (words, label) => recogShowPortionPicker(words, label));
+    return;
+  }
   recogBody.innerHTML = `
 <div class="dict-setup">
   <div class="dict-source-tabs">
@@ -2042,15 +1880,24 @@ function recogShowQuestion() {
   const current = s.currentIdx + 1;
   const pct = ((current - 1) / total * 100).toFixed(1);
 
+  // For 汉字 categories, reveal the kana reading (振假名) next to the meaning
+  // when the answer is shown — so it doesn't give the reading away up front.
+  const showFurigana = Boolean(word.kana && word.kana !== word.english);
+  const furiganaRevealHTML = showFurigana
+    ? `<span class="recog-furigana-reveal">${escapeHTML(word.kana)}</span>`
+    : '';
+  const rHint = showFurigana ? 'R=重听/假名' : 'R=重听';
+
   recogBody.innerHTML = `
 <div class="recog-question">
   <div class="recog-progress">${current} / ${total}</div>
   <div class="recog-progress-bar">
     <div class="recog-progress-fill" style="width: ${pct}%"></div>
   </div>
-  <div class="recog-english">${escapeHTML(word.english)}</div>
+  <div class="recog-english" id="recog-english">${escapeHTML(word.english)}</div>
   <button class="dict-play-btn recog-replay-btn" id="recog-replay-btn">🔊 重听</button>
   <div class="recog-reveal-row" id="recog-reveal-row" style="visibility:hidden">
+    ${furiganaRevealHTML}
     <span class="recog-chinese-reveal" id="recog-chinese">${escapeHTML(word.chinese)}</span>
     <button class="recog-edit-btn" id="recog-edit-btn" title="修改翻译">✎</button>
   </div>
@@ -2058,12 +1905,18 @@ function recogShowQuestion() {
     <button class="recog-no-btn" id="recog-no-btn">✗</button>
     <button class="recog-yes-btn" id="recog-yes-btn">✓</button>
   </div>
-  <div class="recog-hint" id="recog-hint">回车=认识 · 空格=不认识 · R=重听 · Esc=提前退出</div>
+  <div class="recog-hint" id="recog-hint">回车=认识 · 空格=不认识 · ${rHint} · Esc=提前退出</div>
   <button class="recog-exit-btn" id="recog-exit-btn">⏏ 提前退出</button>
 </div>
   `;
 
-  dictPlayTTS(word.english);
+  playWordAudio(word);
+
+  const toggleKana = makeKanaToggler(word, 'recog-english');
+  function replay() {
+    playWordAudio(word);
+    if (toggleKana) toggleKana();
+  }
 
   let revealed = false;
   let graded = false;
@@ -2087,7 +1940,7 @@ function recogShowQuestion() {
     `;
     $('recog-right-btn').addEventListener('click', () => grade(true));
     $('recog-wrong-btn').addEventListener('click', () => grade(false));
-    hintEl.textContent = '回车=认对 · 空格=认错 · R=重听 · Esc=提前退出';
+    hintEl.textContent = `回车=认对 · 空格=认错 · ${rHint} · Esc=提前退出`;
   }
 
   function grade(gotRight) {
@@ -2134,7 +1987,7 @@ function recogShowQuestion() {
   $('recog-yes-btn').addEventListener('click', () => reveal(true));
   $('recog-no-btn').addEventListener('click',  () => reveal(false));
   $('recog-exit-btn').addEventListener('click', earlyExit);
-  replayBtn.addEventListener('click', () => dictPlayTTS(word.english));
+  replayBtn.addEventListener('click', replay);
   editBtn.addEventListener('click', editTranslation);
 
   function onKey(e) {
@@ -2146,7 +1999,7 @@ function recogShowQuestion() {
       if (!revealed) reveal(false); else grade(false);
     } else if (e.key === 'r' || e.key === 'R') {
       e.preventDefault();
-      dictPlayTTS(word.english);
+      replay();
     } else if (e.key === 'Escape') {
       e.preventDefault();
       earlyExit();
@@ -2320,6 +2173,10 @@ function openStudy() {
 // ---- Study Setup Screen ----
 function studyShowSetup() {
   studyBindKeys(null);
+  if (appLang === 'ja') {
+    renderJapaneseSetup(studyBody, '学哪一类日语词？', (words, label) => studyShowPortionPicker(words, label));
+    return;
+  }
   studyBody.innerHTML = `
 <div class="dict-setup">
   <div class="dict-source-tabs">
@@ -2484,25 +2341,33 @@ function studyShowCard() {
   const current = s.currentIdx + 1;
   const pct = ((current - 1) / total * 100).toFixed(1);
 
+  // The card shows the kanji form; R flips it to the kana reading (see
+  // makeKanaToggler). Pure-kana categories (全平假名词/全片假名词) have no
+  // separate reading, so R stays replay-only there.
+  const showFurigana = Boolean(word.kana && word.kana !== word.english);
+  const rHint = showFurigana ? 'R = 朗读 / 假名' : 'R = 朗读';
+
   studyBody.innerHTML = `
 <div class="recog-question">
   <div class="recog-progress">${current} / ${total}</div>
   <div class="recog-progress-bar">
     <div class="recog-progress-fill" style="width: ${pct}%"></div>
   </div>
-  <div class="recog-english">${escapeHTML(word.english)}</div>
+  <div class="recog-english" id="study-word-display">${escapeHTML(word.english)}</div>
   <div class="study-chinese">${escapeHTML(word.chinese)}</div>
   <button class="dict-play-btn recog-replay-btn" id="study-replay-btn">🔊 朗读</button>
   <div class="recog-btn-row">
     <button class="recog-no-btn" id="study-no-btn">✗ 不认识</button>
     <button class="recog-yes-btn" id="study-yes-btn">✓ 认识</button>
   </div>
-  <div class="recog-hint">回车 = 认识 · 空格 = 不认识 · R = 朗读 · Esc = 退出</div>
+  <div class="recog-hint">回车 = 认识 · 空格 = 不认识 · ${rHint} · Esc = 退出</div>
   <button class="recog-exit-btn" id="study-exit-btn">⏏ 退出</button>
 </div>
   `;
 
-  dictPlayTTS(word.english);
+  const toggleKana = makeKanaToggler(word, 'study-word-display');
+
+  playWordAudio(word);
 
   let graded = false;
   function grade(known) {
@@ -2517,8 +2382,14 @@ function studyShowCard() {
     studyBindKeys(null);
     studyShowSummary();
   }
+  // R: always replay the audio; if this word has a kana reading, also flip the
+  // displayed word between its kanji form and that reading (default = kanji).
+  function replayAndToggleKana() {
+    playWordAudio(word);
+    if (toggleKana) toggleKana();
+  }
 
-  $('study-replay-btn').addEventListener('click', () => dictPlayTTS(word.english));
+  $('study-replay-btn').addEventListener('click', replayAndToggleKana);
   $('study-yes-btn').addEventListener('click', () => grade(true));
   $('study-no-btn').addEventListener('click', () => grade(false));
   $('study-exit-btn').addEventListener('click', earlyExit);
@@ -2532,7 +2403,7 @@ function studyShowCard() {
       grade(false);
     } else if (e.key === 'r' || e.key === 'R') {
       e.preventDefault();
-      dictPlayTTS(word.english);
+      replayAndToggleKana();
     } else if (e.key === 'Escape') {
       e.preventDefault();
       earlyExit();
@@ -2697,6 +2568,11 @@ function renderAlphabetGrid(gridEl, loadMsgEl, onLoaded) {
 
 // ---- Setup Screen ----
 function dictShowSetup() {
+  if (appLang === 'ja') {
+    const promptText = dictVariantMeta().desc;
+    renderJapaneseSetup(dictBody, promptText, (words, label) => dictShowPortionPicker(words, label));
+    return;
+  }
   dictBody.innerHTML = `
 <div class="dict-setup">
   <div class="dict-source-tabs">
@@ -2894,10 +2770,11 @@ function preloadTTS(text) {
   return entry.loading;
 }
 
-// Preload an array of {english} entries with bounded concurrency
+// Preload an array of {english} entries with bounded concurrency.
+// Words that carry a local `.audio` file (Japanese) don't need TTS preloading.
 async function preloadTTSBatch(words, concurrency = 4) {
   if (!words || !words.length) return;
-  const queue = words.map(w => w.english).filter(Boolean);
+  const queue = words.filter(w => w.english && !w.audio).map(w => w.english);
   let idx = 0;
   async function worker() {
     while (idx < queue.length) {
@@ -2916,6 +2793,18 @@ function dictPlayTTS(text) {
   // Kick off preload if not in cache so future plays are instant
   if (!cached) preloadTTS(text);
   return audio;
+}
+
+// Plays a word's pronunciation. Japanese word objects carry a `.audio`
+// filename pointing at a local pre-recorded mp3 (served from
+// /japanese/audio/); everything else falls back to on-the-fly Google TTS.
+function playWordAudio(word) {
+  if (word && word.audio) {
+    const audio = new Audio(`${apiBase()}/japanese/audio/${encodeURIComponent(word.audio)}`);
+    audio.play().catch(err => console.warn('audio play failed:', err));
+    return audio;
+  }
+  return dictPlayTTS(word ? word.english : '');
 }
 
 // ---- Question Screen ----
@@ -2982,14 +2871,14 @@ function dictShowQuestion() {
 
   setTimeout(() => answerInput.focus(), 100);
   // advanced: play the word as soon as the question appears
-  if (isAdv) dictPlayTTS(word.english);
+  if (isAdv) playWordAudio(word);
 
   answerInput.addEventListener('keydown', (e) => {
     // On the "✅ 回答正确" screen the input is read-only, so R safely replays
     // the audio without clashing with typing.
     if (awaitingNextEnter && (e.key === 'r' || e.key === 'R')) {
       e.preventDefault();
-      dictPlayTTS(word.english);
+      playWordAudio(word);
       return;
     }
 
@@ -3022,7 +2911,7 @@ function dictShowQuestion() {
       lastAttemptTime = peekNow;
       currentTrace.errorCount++;
       peeked = true;
-      dictPlayTTS(word.english);
+      playWordAudio(word);
       return;
     }
 
@@ -3052,7 +2941,7 @@ function dictShowQuestion() {
       currentTrace.totalMs = correctNow - wordStartTime;
       s.attempts.push(currentTrace);
 
-      dictPlayTTS(word.english);
+      playWordAudio(word);
       awaitingNextEnter = true;
     } else {
       // Wrong
@@ -3077,7 +2966,7 @@ function dictShowQuestion() {
         hintEl.textContent = '请照着打一遍以继续';
         prevWrongEl.innerHTML = `上次输入: <span class="dict-prev-wrong-text">${escapeHTML(ans)}</span>`;
         playBtn.style.display = '';
-        dictPlayTTS(word.english);
+        playWordAudio(word);
       } else {
         feedbackEl.textContent = '❌ 回答错误，请重试';
         feedbackEl.className = 'dict-feedback wrong';
@@ -3089,7 +2978,7 @@ function dictShowQuestion() {
   });
 
   playBtn.addEventListener('click', () => {
-    dictPlayTTS(word.english);
+    playWordAudio(word);
   });
 }
 
@@ -3136,7 +3025,7 @@ function dictShowQuestionUltimate() {
   const gradeRow = $('dict-grade-row');
 
   setTimeout(() => answerInput.focus(), 100);
-  dictPlayTTS(word.english);
+  playWordAudio(word);
 
   let phase = 'answer';   // answer → grade → done
   let typedAnswer = '';
@@ -3188,17 +3077,17 @@ function dictShowQuestionUltimate() {
     // Grading phase: the input is read-only, so these keys are safe.
     if (e.key === 'Enter') { e.preventDefault(); grade(true); }
     else if (e.key === ' ') { e.preventDefault(); grade(false); }
-    else if (e.key === 'r' || e.key === 'R') { e.preventDefault(); dictPlayTTS(word.english); }
+    else if (e.key === 'r' || e.key === 'R') { e.preventDefault(); playWordAudio(word); }
   });
 
   $('dict-right-btn').addEventListener('click', () => grade(true));
   $('dict-wrong-btn').addEventListener('click', () => grade(false));
-  playBtn.addEventListener('click', () => dictPlayTTS(word.english));
+  playBtn.addEventListener('click', () => playWordAudio(word));
 }
 
 // ---- CSV helpers ----
 function dictWordsToCSV(words) {
-  let csv = '\uFEFFEnglish,Chinese\n';
+  let csv = appLang === 'ja' ? '\uFEFF\u65E5\u6587,\u4E2D\u6587\n' : '\uFEFFEnglish,Chinese\n';
   for (const w of words) {
     const en = w.english.replace(/"/g, '""');
     const zh = w.chinese.replace(/"/g, '""');

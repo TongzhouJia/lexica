@@ -132,6 +132,11 @@ func main() {
 	// One-time import: copy alphabet_order_word/*.txt from GCS into Firestore
 	go importAlphabetWordsFromGCS(gcsBucket, credPath)
 
+	// Japanese vocabulary: load local CSVs into memory, then best-effort
+	// back them up to GCS (audio stays local, it's served straight off disk).
+	ensureJapaneseWordsLoaded()
+	go japaneseSyncCSVToGCS(gcsBucket, credPath)
+
 	http.HandleFunc("/", translateHandler(translateKey, ttsKey))
 	http.HandleFunc("/play", playHandler(ttsKey))
 	http.HandleFunc("/save", saveHandler())
@@ -153,6 +158,9 @@ func main() {
 	http.HandleFunc("/clean/sync", cleanSyncHandler())
 	http.HandleFunc("/progress/", progressHandler())
 	http.HandleFunc("/progress.js", lexicaAssetHandler("progress.js", "application/javascript; charset=utf-8"))
+	http.HandleFunc("/japanese/words", japaneseWordsHandler())
+	http.HandleFunc("/japanese/categories", japaneseCategoriesHandler())
+	http.HandleFunc("/japanese/audio/", japaneseAudioHandler())
 
 	// Bind on all interfaces by default so other machines on the LAN can
 	// reach the server via this host's IP. Override with LISTEN_ADDR

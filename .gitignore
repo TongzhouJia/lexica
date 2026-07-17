@@ -25,3 +25,6 @@ word_reader
 .DS_Store
 **/.DS_Store
 **/._*
+
+# 忽略 Claude Code 本机配置
+.claude/settings.local.json
