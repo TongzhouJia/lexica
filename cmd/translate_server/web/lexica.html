@@ -64,23 +64,37 @@
   <div class="app-shell">
     <aside class="library" aria-label="Navigation">
       <div class="sidebar-tabs">
-        <button class="sidebar-tab" id="tab-dict-strict" title="听写·基础 · 看中文拼英文">
+        <!-- English mode tabs -->
+        <button class="sidebar-tab en-only" id="tab-dict-strict" title="听写·基础 · 看中文拼英文">
           <span class="tab-icon">✍️</span>听写·基础
         </button>
-        <button class="sidebar-tab" id="tab-dict-advanced" title="听写·进阶 · 听音频拼英文">
+        <button class="sidebar-tab en-only" id="tab-dict-advanced" title="听写·进阶 · 听音频拼英文">
           <span class="tab-icon">🎧</span>听写·进阶
         </button>
-        <button class="sidebar-tab" id="tab-dict-ultimate" title="听写·终极 · 听音频写中文，自己判定">
+        <button class="sidebar-tab en-only" id="tab-dict-ultimate" title="听写·终极 · 听音频写中文，自己判定">
           <span class="tab-icon">🧠</span>听写·终极
         </button>
-        <button class="sidebar-tab" id="tab-learn" title="学习新词·按顺序认词">
+        <button class="sidebar-tab en-only" id="tab-learn" title="学习新词·按顺序认词">
           <span class="tab-icon">📖</span>新词
         </button>
-        <button class="sidebar-tab" id="tab-recog" title="认词·看英文标认识">
+        <button class="sidebar-tab en-only" id="tab-recog" title="认词·看英文标认识">
           <span class="tab-icon">👁️</span>认词
         </button>
-        <button class="sidebar-tab" id="tab-study" title="学词·中英文同时显示 · 空格/回车下一个">
+        <button class="sidebar-tab en-only" id="tab-study" title="学词·中英文同时显示 · 空格/回车下一个">
           <span class="tab-icon">🔖</span>学词
+        </button>
+        <!-- Japanese mode tabs: the 4 word categories (populated by JS) -->
+        <button class="sidebar-tab ja-only" id="tab-ja-cat-0" title="全汉字词 · 分卷选择">
+          <span class="tab-icon">🈶</span>全汉字词
+        </button>
+        <button class="sidebar-tab ja-only" id="tab-ja-cat-1" title="假名汉字混合词 · 分卷选择">
+          <span class="tab-icon">🈚</span>假名汉字混合词
+        </button>
+        <button class="sidebar-tab ja-only" id="tab-ja-cat-2" title="全平假名词 · 分卷选择">
+          <span class="tab-icon">🅰️</span>全平假名词
+        </button>
+        <button class="sidebar-tab ja-only" id="tab-ja-cat-3" title="全片假名词 · 分卷选择">
+          <span class="tab-icon">🔤</span>全片假名词
         </button>
       </div>
 

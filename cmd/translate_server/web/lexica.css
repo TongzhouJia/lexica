@@ -416,6 +416,11 @@ button.primary:hover {
   flex-shrink: 0;
 }
 
+/* Language-scoped tabs: English tabs in EN mode, category tabs in JA mode. */
+.sidebar-tab.ja-only { display: none; }
+body.lang-ja .sidebar-tab.en-only { display: none; }
+body.lang-ja .sidebar-tab.ja-only { display: flex; }
+
 /* Home-screen background picker (sidebar) */
 .bg-picker {
   position: relative;

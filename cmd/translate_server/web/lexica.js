@@ -134,6 +134,13 @@ function setAppLang(lang) {
   appLang = lang;
   localStorage.setItem('lexica.lang', lang);
   applyLangUI();
+  // Land on a clean home screen: close any open practice panel, drop the
+  // active tab (the set of tabs differs per language), and clear the pending
+  // Japanese category so the user picks fresh.
+  jaActiveCategory = null;
+  [dictPanel, learnPanel, recogPanel, studyPanel].forEach(p => p && p.classList.remove('visible'));
+  setActiveTab(null);
+  showSidebarContent(null);
   dictReset();
   learnReset();
   recogReset();
@@ -1011,7 +1018,7 @@ let dictState = {
 };
 
 function setActiveTab(tab) {
-  [tabDictStrict, tabDictAdvanced, tabDictUltimate, tabLearn, tabRecog, tabStudy].forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
   if (tab) tab.classList.add('active');
 }
 
@@ -1056,6 +1063,29 @@ tabDictUltimate.addEventListener('click', () => openDictation('ultimate'));
 tabLearn.addEventListener('click', () => openLearn());
 tabRecog.addEventListener('click', () => openRecognition());
 tabStudy.addEventListener('click', () => openStudy());
+
+// Japanese mode: the 4 category tabs each open the 新词 (learn) module,
+// drilling category → 分卷(part) → 范围(1/4·1/2·全部) → 学习.
+let jaActiveCategory = null;
+JAPANESE_CATEGORIES.forEach((cat, i) => {
+  const tab = $(`tab-ja-cat-${i}`);
+  if (tab) tab.addEventListener('click', () => openJapaneseCategory(cat, tab));
+});
+
+function openJapaneseCategory(cat, tabBtn) {
+  jaActiveCategory = cat;
+  setActiveTab(tabBtn);
+  showSidebarContent('learn');
+  learnPanel.classList.add('visible');
+  dictPanel.classList.remove('visible');
+  recogPanel.classList.remove('visible');
+  studyPanel.classList.remove('visible');
+  exitTableNav();
+  readerPanel.classList.remove('visible');
+  $('learn-title').textContent = cat.label;
+  learnState.words = [];
+  learnShowJapaneseSetup(cat);
+}
 
 dictCloseBtn.addEventListener('click', () => {
   dictPanel.classList.remove('visible');
@@ -1147,7 +1177,11 @@ function openLearn() {
 // ---- Learn Setup Screen ----
 function learnShowSetup() {
   if (appLang === 'ja') {
-    renderJapaneseSetup(learnBody, '学哪一类日语词？', (words, label) => learnShowPortionPicker(words, label));
+    if (jaActiveCategory) {
+      learnShowJapaneseSetup(jaActiveCategory);
+    } else {
+      renderJapaneseSetup(learnBody, '学哪一类日语词？', (words, label) => learnShowPortionPicker(words, label));
+    }
     return;
   }
   learnBody.innerHTML = `
@@ -1223,6 +1257,172 @@ function learnShowSetup() {
   $('learn-paste-csv-btn').addEventListener('click', () => {
     showPasteCSVScreen(learnBody, learnShowSetup, (words, label) => learnShowPortionPicker(words, label));
   });
+}
+
+// ---- Learn · Japanese part picker (分卷选择) ----
+// For a Japanese category, list its CSV files (parts) like the English "days",
+// plus a 粘贴 CSV option for one-off temporary study.
+async function learnShowJapaneseSetup(cat) {
+  learnBody.innerHTML = `<div class="dict-setup"><div class="dict-setup-label">${escapeHTML(cat.label)} · 加载分卷中…</div></div>`;
+
+  let parts;
+  try {
+    const res = await fetch(`${apiBase()}/japanese/parts?category=${encodeURIComponent(cat.id)}`);
+    if (!res.ok) throw new Error(`加载分卷失败：${cat.label}`);
+    parts = await res.json();
+  } catch (err) {
+    learnBody.innerHTML = `<div class="dict-setup"><div class="dict-loading">❌ ${escapeHTML(err.message)}</div></div>`;
+    return;
+  }
+
+  const wrap = document.createElement('div');
+  wrap.className = 'dict-setup';
+
+  const label = document.createElement('div');
+  label.className = 'dict-setup-label';
+  label.textContent = `${cat.label} · 选择分卷`;
+  wrap.appendChild(label);
+
+  const grid = document.createElement('div');
+  grid.className = 'dict-day-grid';
+  wrap.appendChild(grid);
+
+  const aux = document.createElement('div');
+  aux.className = 'setup-aux-row';
+  const pasteBtn = document.createElement('button');
+  pasteBtn.className = 'dict-back-btn';
+  pasteBtn.textContent = '📋 粘贴 CSV';
+  pasteBtn.addEventListener('click', () => {
+    showJapanesePasteCSVScreen(learnBody, () => learnShowJapaneseSetup(cat),
+      (words, lbl) => learnShowPortionPicker(words, lbl));
+  });
+  aux.appendChild(pasteBtn);
+  wrap.appendChild(aux);
+
+  const loadMsg = document.createElement('div');
+  loadMsg.className = 'dict-loading';
+  wrap.appendChild(loadMsg);
+
+  (parts || []).forEach(p => {
+    const btn = document.createElement('button');
+    btn.className = 'dict-day-btn';
+    btn.innerHTML = `<span>${escapeHTML(p.label)}</span>`;
+    btn.title = `${p.count} 词`;
+    btn.addEventListener('click', async () => {
+      Array.from(grid.children).forEach(b => b.disabled = true);
+      loadMsg.textContent = `正在加载 分卷${p.label} …`;
+      try {
+        const res = await fetch(`${apiBase()}/japanese/words?category=${encodeURIComponent(cat.id)}&part=${encodeURIComponent(p.part)}`);
+        if (!res.ok) throw new Error(`加载失败：分卷${p.label}`);
+        const words = await res.json();
+        learnShowPortionPicker(words, `${cat.label} · 分卷${p.label}`);
+      } catch (err) {
+        loadMsg.textContent = `❌ ${err.message}`;
+        Array.from(grid.children).forEach(b => b.disabled = false);
+      }
+    });
+    grid.appendChild(btn);
+  });
+
+  if (!parts || !parts.length) {
+    loadMsg.textContent = '该类别下没有找到分卷文件';
+  }
+
+  learnBody.innerHTML = '';
+  learnBody.appendChild(wrap);
+}
+
+// splitCSVLine splits one CSV line into fields, honoring double-quoted fields
+// (with "" as an escaped quote).
+function splitCSVLine(line) {
+  const out = [];
+  let cur = '';
+  let inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (inQ) {
+      if (c === '"') {
+        if (line[i + 1] === '"') { cur += '"'; i++; }
+        else inQ = false;
+      } else cur += c;
+    } else if (c === '"') {
+      inQ = true;
+    } else if (c === ',') {
+      out.push(cur); cur = '';
+    } else cur += c;
+  }
+  out.push(cur);
+  return out.map(s => s.trim());
+}
+
+// parseJapaneseCSVText parses the Japanese export format:
+//   4 列: 日文, 假名读音, 中文释义, 音频文件
+//   3 列: 日文, 中文释义, 音频文件
+//   2 列: 日文, 中文释义
+// Audio names that have no matching local mp3 just fall back to TTS.
+function parseJapaneseCSVText(text) {
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  const words = [];
+  for (let i = 0; i < lines.length; i++) {
+    const cols = splitCSVLine(lines[i]);
+    const c0 = (cols[0] || '');
+    // Skip a header row (first cell looks like a column name).
+    if (i === 0 && /^(english|日文|单词|词|word|假名)/i.test(c0)) continue;
+    const jp = c0;
+    if (!jp) continue;
+
+    let kana = jp, chinese = '', audio = '';
+    if (cols.length >= 4) {
+      kana = cols[1] || jp;
+      chinese = cols[2] || '';
+      audio = cols[3] || '';
+    } else if (cols.length === 3) {
+      chinese = cols[1] || '';
+      audio = cols[2] || '';
+    } else if (cols.length === 2) {
+      chinese = cols[1] || '';
+    }
+    if (!chinese) continue;
+    words.push({ english: jp, chinese, kana, audio, category: 'paste' });
+  }
+  return words;
+}
+
+// Japanese variant of showPasteCSVScreen — same UI, but parses the 3/4-column
+// Japanese export format instead of the 2-column English one.
+function showJapanesePasteCSVScreen(bodyEl, onBack, onLoaded) {
+  bodyEl.innerHTML = `
+<div class="dict-setup">
+  <div class="dict-setup-label">粘贴 CSV 内容（日文,假名,中文,音频）</div>
+  <textarea id="ja-paste-csv-textarea" class="paste-csv-textarea" rows="8" placeholder="日文,假名,中文,音频&#10;&quot;中国人&quot;,&quot;ちゅうごくじん&quot;,&quot;中国人&quot;,&quot;book01-lesson01-00.mp3&quot;&#10;&quot;日本&quot;,&quot;にほん&quot;,&quot;日本&quot;," spellcheck="false"></textarea>
+  <div class="recog-summary-actions">
+    <button class="dict-back-btn" id="ja-paste-csv-back">← 返回</button>
+    <button class="dict-start-btn" id="ja-paste-csv-load">加载</button>
+  </div>
+  <div class="dict-loading" id="ja-paste-csv-msg"></div>
+</div>
+  `;
+  const textarea = bodyEl.querySelector('#ja-paste-csv-textarea');
+  const loadMsg = bodyEl.querySelector('#ja-paste-csv-msg');
+  setTimeout(() => textarea.focus(), 50);
+
+  bodyEl.querySelector('#ja-paste-csv-back').addEventListener('click', onBack);
+
+  function go() {
+    const text = textarea.value.trim();
+    if (!text) {
+      loadMsg.textContent = '❌ 请粘贴 CSV 内容';
+      return;
+    }
+    try {
+      const words = parseJapaneseCSVText(text);
+      if (!words || !words.length) throw new Error('未能解析出任何词，请检查格式');
+      onLoaded(words, `粘贴(${words.length}词)`);
+    } catch (err) {
+      loadMsg.textContent = `❌ ${err.message}`;
+    }
+  }
+  bodyEl.querySelector('#ja-paste-csv-load').addEventListener('click', go);
 }
 
 // ---- Learn Portion Picker ----

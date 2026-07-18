@@ -48,10 +48,19 @@ var japaneseCategories = []japaneseCategory{
 	{ID: "3_全片假名词", Label: "全片假名词", Dir: filepath.Join("全假名", "3_全片假名词"), Kanji: false},
 }
 
+// japanesePart is one CSV file within a category (like an English "day"), so
+// the frontend can drill: category → part → range → study.
+type japanesePart struct {
+	Name  string         // CSV file name, e.g. "1_全汉字词_part1.csv"
+	Label string         // display label, e.g. "1" (the partN number)
+	Words []JapaneseWord // words in this file, in file order
+}
+
 var (
 	japaneseOnce  sync.Once
 	japaneseMu    sync.RWMutex
-	japaneseWords map[string][]JapaneseWord // category id -> words, load order preserved
+	japaneseWords map[string][]JapaneseWord   // category id -> all words, load order preserved
+	japaneseParts map[string][]japanesePart   // category id -> parts, sorted naturally
 )
 
 func japaneseDataDir() string {
@@ -88,9 +97,59 @@ func sortCSVPartFiles(names []string) {
 	})
 }
 
-// loadJapaneseCategory parses every *.csv under a category's directory and
-// returns the combined word list in file order.
-func loadJapaneseCategory(cat japaneseCategory) ([]JapaneseWord, error) {
+// parseJapaneseCSVFile parses a single CSV file into words (skipping the header
+// row), honoring the category's 4-column (汉字) vs 3-column (纯假名) layout.
+func parseJapaneseCSVFile(cat japaneseCategory, path string) ([]JapaneseWord, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	data = bytes.TrimPrefix(data, []byte("\xEF\xBB\xBF")) // strip UTF-8 BOM
+
+	reader := csv.NewReader(bytes.NewReader(data))
+	reader.FieldsPerRecord = -1
+	reader.LazyQuotes = true
+	rows, err := reader.ReadAll()
+	if err != nil {
+		return nil, err
+	}
+
+	var words []JapaneseWord
+	for i, row := range rows {
+		if i == 0 {
+			continue // header row
+		}
+		if cat.Kanji {
+			if len(row) < 4 {
+				continue
+			}
+			word := strings.TrimSpace(row[0])
+			kana := strings.TrimSpace(row[1])
+			chinese := strings.TrimSpace(row[2])
+			audio := strings.TrimSpace(row[3])
+			if word == "" {
+				continue
+			}
+			words = append(words, JapaneseWord{English: word, Chinese: chinese, Kana: kana, Audio: audio, Category: cat.ID})
+		} else {
+			if len(row) < 3 {
+				continue
+			}
+			word := strings.TrimSpace(row[0])
+			chinese := strings.TrimSpace(row[1])
+			audio := strings.TrimSpace(row[2])
+			if word == "" {
+				continue
+			}
+			words = append(words, JapaneseWord{English: word, Chinese: chinese, Kana: word, Audio: audio, Category: cat.ID})
+		}
+	}
+	return words, nil
+}
+
+// loadJapaneseCategory parses every *.csv under a category's directory, one
+// japanesePart per file, sorted naturally (part2 before part10).
+func loadJapaneseCategory(cat japaneseCategory) ([]japanesePart, error) {
 	dir := filepath.Join(japaneseCSVDir(), cat.Dir)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -106,77 +165,54 @@ func loadJapaneseCategory(cat japaneseCategory) ([]JapaneseWord, error) {
 	}
 	sortCSVPartFiles(names)
 
-	var words []JapaneseWord
+	var parts []japanesePart
 	for _, name := range names {
-		data, err := os.ReadFile(filepath.Join(dir, name))
-		if err != nil {
-			log.Printf("[japanese] read %s/%s error: %v", cat.Dir, name, err)
-			continue
-		}
-		data = bytes.TrimPrefix(data, []byte("\xEF\xBB\xBF")) // strip UTF-8 BOM
-
-		reader := csv.NewReader(bytes.NewReader(data))
-		reader.FieldsPerRecord = -1
-		reader.LazyQuotes = true
-		rows, err := reader.ReadAll()
+		words, err := parseJapaneseCSVFile(cat, filepath.Join(dir, name))
 		if err != nil {
 			log.Printf("[japanese] parse %s/%s error: %v", cat.Dir, name, err)
 			continue
 		}
-
-		for i, row := range rows {
-			if i == 0 {
-				continue // header row
-			}
-			if cat.Kanji {
-				if len(row) < 4 {
-					continue
-				}
-				word := strings.TrimSpace(row[0])
-				kana := strings.TrimSpace(row[1])
-				chinese := strings.TrimSpace(row[2])
-				audio := strings.TrimSpace(row[3])
-				if word == "" {
-					continue
-				}
-				words = append(words, JapaneseWord{English: word, Chinese: chinese, Kana: kana, Audio: audio, Category: cat.ID})
-			} else {
-				if len(row) < 3 {
-					continue
-				}
-				word := strings.TrimSpace(row[0])
-				chinese := strings.TrimSpace(row[1])
-				audio := strings.TrimSpace(row[2])
-				if word == "" {
-					continue
-				}
-				words = append(words, JapaneseWord{English: word, Chinese: chinese, Kana: word, Audio: audio, Category: cat.ID})
-			}
-		}
+		parts = append(parts, japanesePart{Name: name, Label: japanesePartLabel(name), Words: words})
 	}
-	return words, nil
+	return parts, nil
+}
+
+// japanesePartLabel turns "1_全汉字词_part7.csv" into "7"; falls back to the
+// file name (minus .csv) when there's no _partN suffix.
+func japanesePartLabel(name string) string {
+	if m := partNumberRe.FindStringSubmatch(name); m != nil {
+		return m[1]
+	}
+	return strings.TrimSuffix(name, ".csv")
 }
 
 // loadJapaneseWords loads every category into memory. Cheap enough (a few
 // thousand short rows total) to just read from disk once at startup.
 func loadJapaneseWords() {
-	out := make(map[string][]JapaneseWord, len(japaneseCategories))
+	outWords := make(map[string][]JapaneseWord, len(japaneseCategories))
+	outParts := make(map[string][]japanesePart, len(japaneseCategories))
 	total := 0
 	for _, cat := range japaneseCategories {
-		words, err := loadJapaneseCategory(cat)
+		parts, err := loadJapaneseCategory(cat)
 		if err != nil {
 			log.Printf("[japanese] skip category %s: %v", cat.ID, err)
 			continue
 		}
-		out[cat.ID] = words
-		total += len(words)
+		var flat []JapaneseWord
+		for _, p := range parts {
+			flat = append(flat, p.Words...)
+		}
+		outWords[cat.ID] = flat
+		outParts[cat.ID] = parts
+		total += len(flat)
 	}
 
 	japaneseMu.Lock()
-	japaneseWords = out
+	japaneseWords = outWords
+	japaneseParts = outParts
 	japaneseMu.Unlock()
 
-	log.Printf("[japanese] loaded %d words across %d categories", total, len(out))
+	log.Printf("[japanese] loaded %d words across %d categories", total, len(outWords))
 }
 
 func ensureJapaneseWordsLoaded() {
@@ -204,8 +240,67 @@ func japaneseWordsHandler() http.HandlerFunc {
 			return
 		}
 
+		part := r.URL.Query().Get("part")
+
 		japaneseMu.RLock()
 		words, ok := japaneseWords[category]
+		if ok && part != "" {
+			// Return just the requested part (CSV file) when specified.
+			found := false
+			for _, p := range japaneseParts[category] {
+				if p.Name == part {
+					words = p.Words
+					found = true
+					break
+				}
+			}
+			ok = found
+		}
+		japaneseMu.RUnlock()
+		if !ok {
+			http.Error(w, "unknown category/part", http.StatusNotFound)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		json.NewEncoder(w).Encode(words)
+	}
+}
+
+// japanesePartInfo is returned by /japanese/parts
+type japanesePartInfo struct {
+	Part  string `json:"part"`  // CSV file name, passed back as ?part=
+	Label string `json:"label"` // display label, e.g. "1"
+	Count int    `json:"count"`
+}
+
+// japanesePartsHandler – GET /japanese/parts?category=X → [{part,label,count}]
+func japanesePartsHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeCORSHeaders(w)
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.Method != http.MethodGet {
+			http.Error(w, "only GET is allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		ensureJapaneseWordsLoaded()
+
+		category := r.URL.Query().Get("category")
+		if category == "" {
+			http.Error(w, "missing category parameter", http.StatusBadRequest)
+			return
+		}
+
+		japaneseMu.RLock()
+		parts, ok := japaneseParts[category]
+		out := make([]japanesePartInfo, 0, len(parts))
+		for _, p := range parts {
+			out = append(out, japanesePartInfo{Part: p.Name, Label: p.Label, Count: len(p.Words)})
+		}
 		japaneseMu.RUnlock()
 		if !ok {
 			http.Error(w, "unknown category: "+category, http.StatusNotFound)
@@ -213,7 +308,7 @@ func japaneseWordsHandler() http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		json.NewEncoder(w).Encode(words)
+		json.NewEncoder(w).Encode(out)
 	}
 }
 
