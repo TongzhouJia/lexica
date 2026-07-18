@@ -895,13 +895,16 @@ document.addEventListener('keydown', (e) => {
   } else if ((e.key === 'r' || e.key === 'R') && !isEditableTarget(e.target) && !e.metaKey && !e.ctrlKey && !e.altKey) {
     e.preventDefault();
     playCurrentWord();
+  } else if ((e.key === 'a' || e.key === 'A') && !isEditableTarget(e.target) && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    e.preventDefault();
+    saveToMistakeBook();
   }
 });
 
 // ========================================================
 //  Save to wrong-book
 // ========================================================
-saveBtn.addEventListener('click', async () => {
+async function saveToMistakeBook() {
   if (!currentWord) return;
 
   // Try to read translation text from iframe (works if same-origin)
@@ -913,7 +916,7 @@ saveBtn.addEventListener('click', async () => {
     }
   } catch (_) { /* cross-origin */ }
 
-  const url = `${apiBase()}/save?text=${encodeURIComponent(currentWord)}` +
+  const url = `${apiBase()}/mistakes/save?text=${encodeURIComponent(currentWord)}` +
     `&translated=${encodeURIComponent(translated)}` +
     `&sl=${currentSl}`;
 
@@ -921,7 +924,7 @@ saveBtn.addEventListener('click', async () => {
   try {
     const res = await fetch(url);
     const txt = (await res.text()).trim();
-    flash(txt === 'exists' ? '已在错题本' : '已收藏 ✓');
+    flash(txt === 'exists' ? '已在今日错题本' : '已加入错题本 ✓');
   } catch (err) {
     // CORS error path — fire blind and assume success
     try {
@@ -931,7 +934,9 @@ saveBtn.addEventListener('click', async () => {
       flash('保存失败: ' + e2.message, true);
     }
   }
-});
+}
+
+saveBtn.addEventListener('click', saveToMistakeBook);
 
 function flash(msg, isError) {
   const el = document.createElement('div');

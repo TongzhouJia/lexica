@@ -140,6 +140,7 @@ func main() {
 	http.HandleFunc("/", translateHandler(translateKey, ttsKey))
 	http.HandleFunc("/play", playHandler(ttsKey))
 	http.HandleFunc("/save", saveHandler())
+	http.HandleFunc("/mistakes/save", mistakeSaveHandler())
 	http.HandleFunc("/lexica", lexicaHandler())
 	http.HandleFunc("/lexica.css", lexicaAssetHandler("lexica.css", "text/css; charset=utf-8"))
 	http.HandleFunc("/markdown-theme.css", lexicaAssetHandler("markdown-theme.css", "text/css; charset=utf-8"))
