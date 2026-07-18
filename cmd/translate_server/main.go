@@ -161,6 +161,8 @@ func main() {
 	http.HandleFunc("/progress.js", lexicaAssetHandler("progress.js", "application/javascript; charset=utf-8"))
 	http.HandleFunc("/japanese/words", japaneseWordsHandler())
 	http.HandleFunc("/japanese/parts", japanesePartsHandler())
+	http.HandleFunc("/japanese/kana-letters", japaneseKanaLettersHandler())
+	http.HandleFunc("/japanese/kana-words", japaneseKanaWordsHandler())
 	http.HandleFunc("/japanese/categories", japaneseCategoriesHandler())
 	http.HandleFunc("/japanese/audio/", japaneseAudioHandler())
 

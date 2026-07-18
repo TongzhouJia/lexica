@@ -43,9 +43,11 @@ const apiBase = () => apiUrlInput.value.trim().replace(/\/+$/, '');
 // see playWordAudio() further down for the local-mp3-vs-TTS branch.
 let appLang = localStorage.getItem('lexica.lang') === 'ja' ? 'ja' : 'en';
 
+// `kana: true` → this category has a 五十音 (by-first-kana) index built from the
+// kanji readings, so its setup offers a 分卷 / 五十音 source toggle.
 const JAPANESE_CATEGORIES = [
-  { id: '1_全汉字词', label: '全汉字词' },
-  { id: '4_平假名汉字混合词', label: '假名汉字混合词' },
+  { id: '1_全汉字词', label: '全汉字词', kana: true },
+  { id: '4_平假名汉字混合词', label: '假名汉字混合词', kana: true },
   { id: '2_全平假名词', label: '全平假名词' },
   { id: '3_全片假名词', label: '全片假名词' },
 ];
@@ -1259,50 +1261,75 @@ function learnShowSetup() {
   });
 }
 
-// ---- Learn · Japanese part picker (分卷选择) ----
-// For a Japanese category, list its CSV files (parts) like the English "days",
-// plus a 粘贴 CSV option for one-off temporary study.
-async function learnShowJapaneseSetup(cat) {
-  learnBody.innerHTML = `<div class="dict-setup"><div class="dict-setup-label">${escapeHTML(cat.label)} · 加载分卷中…</div></div>`;
+// ---- Learn · Japanese category setup ----
+// Mirrors the English "21天 / 字母表" setup: a 分卷 (part CSV) source and, for
+// kanji categories, a 五十音 (by reading's first kana) source. Plus a 粘贴 CSV
+// option for one-off temporary study.
+function learnShowJapaneseSetup(cat) {
+  const hasKana = !!cat.kana;
+  learnBody.innerHTML = `
+<div class="dict-setup">
+  ${hasKana ? `<div class="dict-source-tabs">
+    <button class="dict-source-tab active" id="ja-tab-parts">分卷</button>
+    <button class="dict-source-tab" id="ja-tab-kana">五十音</button>
+  </div>` : ''}
+  <div id="ja-parts-panel">
+    <div class="dict-setup-label">${escapeHTML(cat.label)} · 选择分卷</div>
+    <div class="dict-day-grid" id="ja-parts-grid"></div>
+  </div>
+  <div id="ja-kana-panel" style="display:none">
+    <div class="dict-setup-label">${escapeHTML(cat.label)} · 选择五十音（按读音首字母）</div>
+    <div class="dict-day-grid ja-kana-grid" id="ja-kana-grid"></div>
+  </div>
+  <div class="setup-aux-row">
+    <button class="dict-back-btn" id="ja-paste-csv-btn">📋 粘贴 CSV</button>
+  </div>
+  <div class="dict-loading" id="ja-load-msg"></div>
+</div>
+  `;
 
+  const loadMsg = $('ja-load-msg');
+
+  $('ja-paste-csv-btn').addEventListener('click', () => {
+    showJapanesePasteCSVScreen(learnBody, () => learnShowJapaneseSetup(cat),
+      (words, lbl) => learnShowPortionPicker(words, lbl));
+  });
+
+  if (hasKana) {
+    const tabParts = $('ja-tab-parts');
+    const tabKana = $('ja-tab-kana');
+    const partsPanel = $('ja-parts-panel');
+    const kanaPanel = $('ja-kana-panel');
+    tabParts.addEventListener('click', () => {
+      tabParts.classList.add('active'); tabKana.classList.remove('active');
+      partsPanel.style.display = ''; kanaPanel.style.display = 'none';
+      loadMsg.textContent = '';
+    });
+    tabKana.addEventListener('click', () => {
+      tabKana.classList.add('active'); tabParts.classList.remove('active');
+      kanaPanel.style.display = ''; partsPanel.style.display = 'none';
+      loadMsg.textContent = '';
+      populateJaKanaGrid(cat, $('ja-kana-grid'), loadMsg);
+    });
+  }
+
+  populateJaPartsGrid(cat, $('ja-parts-grid'), loadMsg);
+}
+
+// Fills the 分卷 grid from /japanese/parts. Each part → 范围 picker → 学习.
+async function populateJaPartsGrid(cat, grid, loadMsg) {
+  if (grid.dataset.loaded) return;
   let parts;
   try {
     const res = await fetch(`${apiBase()}/japanese/parts?category=${encodeURIComponent(cat.id)}`);
     if (!res.ok) throw new Error(`加载分卷失败：${cat.label}`);
     parts = await res.json();
   } catch (err) {
-    learnBody.innerHTML = `<div class="dict-setup"><div class="dict-loading">❌ ${escapeHTML(err.message)}</div></div>`;
+    loadMsg.textContent = `❌ ${err.message}`;
     return;
   }
-
-  const wrap = document.createElement('div');
-  wrap.className = 'dict-setup';
-
-  const label = document.createElement('div');
-  label.className = 'dict-setup-label';
-  label.textContent = `${cat.label} · 选择分卷`;
-  wrap.appendChild(label);
-
-  const grid = document.createElement('div');
-  grid.className = 'dict-day-grid';
-  wrap.appendChild(grid);
-
-  const aux = document.createElement('div');
-  aux.className = 'setup-aux-row';
-  const pasteBtn = document.createElement('button');
-  pasteBtn.className = 'dict-back-btn';
-  pasteBtn.textContent = '📋 粘贴 CSV';
-  pasteBtn.addEventListener('click', () => {
-    showJapanesePasteCSVScreen(learnBody, () => learnShowJapaneseSetup(cat),
-      (words, lbl) => learnShowPortionPicker(words, lbl));
-  });
-  aux.appendChild(pasteBtn);
-  wrap.appendChild(aux);
-
-  const loadMsg = document.createElement('div');
-  loadMsg.className = 'dict-loading';
-  wrap.appendChild(loadMsg);
-
+  grid.innerHTML = '';
+  grid.dataset.loaded = '1';
   (parts || []).forEach(p => {
     const btn = document.createElement('button');
     btn.className = 'dict-day-btn';
@@ -1323,13 +1350,44 @@ async function learnShowJapaneseSetup(cat) {
     });
     grid.appendChild(btn);
   });
+  if (!parts || !parts.length) loadMsg.textContent = '该类别下没有找到分卷文件';
+}
 
-  if (!parts || !parts.length) {
-    loadMsg.textContent = '该类别下没有找到分卷文件';
+// Fills the 五十音 grid from /japanese/kana-letters. Each kana → 范围 picker → 学习.
+async function populateJaKanaGrid(cat, grid, loadMsg) {
+  if (grid.dataset.loaded) return;
+  let letters;
+  try {
+    const res = await fetch(`${apiBase()}/japanese/kana-letters?category=${encodeURIComponent(cat.id)}`);
+    if (!res.ok) throw new Error('加载五十音失败');
+    letters = await res.json();
+  } catch (err) {
+    loadMsg.textContent = `❌ ${err.message}`;
+    return;
   }
-
-  learnBody.innerHTML = '';
-  learnBody.appendChild(wrap);
+  grid.innerHTML = '';
+  grid.dataset.loaded = '1';
+  (letters || []).forEach(l => {
+    const btn = document.createElement('button');
+    btn.className = 'dict-day-btn';
+    btn.textContent = l.kana;
+    btn.title = `${l.count} 词`;
+    btn.addEventListener('click', async () => {
+      Array.from(grid.children).forEach(b => b.disabled = true);
+      loadMsg.textContent = `正在加载 ${l.kana} …`;
+      try {
+        const res = await fetch(`${apiBase()}/japanese/kana-words?category=${encodeURIComponent(cat.id)}&kana=${encodeURIComponent(l.kana)}`);
+        if (!res.ok) throw new Error(`加载失败：${l.kana}`);
+        const words = await res.json();
+        learnShowPortionPicker(words, `${cat.label} · ${l.kana}`);
+      } catch (err) {
+        loadMsg.textContent = `❌ ${err.message}`;
+        Array.from(grid.children).forEach(b => b.disabled = false);
+      }
+    });
+    grid.appendChild(btn);
+  });
+  if (!letters || !letters.length) loadMsg.textContent = '该类别没有五十音索引';
 }
 
 // splitCSVLine splits one CSV line into fields, honoring double-quoted fields

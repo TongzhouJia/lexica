@@ -59,8 +59,9 @@ type japanesePart struct {
 var (
 	japaneseOnce  sync.Once
 	japaneseMu    sync.RWMutex
-	japaneseWords map[string][]JapaneseWord   // category id -> all words, load order preserved
-	japaneseParts map[string][]japanesePart   // category id -> parts, sorted naturally
+	japaneseWords map[string][]JapaneseWord // category id -> all words, load order preserved
+	japaneseParts map[string][]japanesePart // category id -> parts (CSV files), sorted naturally
+	japaneseKana  map[string][]japanesePart // category id -> gojūon groups (只有汉字/混合词), in kana order
 )
 
 func japaneseDataDir() string {
@@ -73,6 +74,53 @@ func japaneseCSVDir() string {
 
 func japaneseAudioDir() string {
 	return filepath.Join(japaneseDataDir(), "audio")
+}
+
+// japaneseKanaDir is the gojūon-sorted copy built by scripts/build_kana.py:
+// data/japanese/kana/<category>/<kana>/<kana>.csv.
+func japaneseKanaDir() string {
+	return filepath.Join(japaneseDataDir(), "kana")
+}
+
+// loadJapaneseKanaGroups reads the gojūon folders for a category. Each subdir is
+// one initial-kana group holding a single CSV. Returns nil (no error) when the
+// category has no kana copy (only 汉字/混合词 categories do). Directory order
+// from ReadDir is lexicographic, which for base-kana codepoints is gojūon order.
+func loadJapaneseKanaGroups(cat japaneseCategory) []japanesePart {
+	base := filepath.Join(japaneseKanaDir(), cat.ID)
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return nil // no kana copy for this category
+	}
+
+	var groups []japanesePart
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		kana := e.Name()
+		gdir := filepath.Join(base, kana)
+		files, err := os.ReadDir(gdir)
+		if err != nil {
+			continue
+		}
+		var words []JapaneseWord
+		for _, f := range files {
+			if f.IsDir() || !strings.HasSuffix(strings.ToLower(f.Name()), ".csv") {
+				continue
+			}
+			w, err := parseJapaneseCSVFile(cat, filepath.Join(gdir, f.Name()))
+			if err != nil {
+				log.Printf("[japanese] parse kana %s/%s error: %v", cat.ID, kana, err)
+				continue
+			}
+			words = append(words, w...)
+		}
+		if len(words) > 0 {
+			groups = append(groups, japanesePart{Name: kana, Label: kana, Words: words})
+		}
+	}
+	return groups
 }
 
 // partNumberRe pulls the trailing "_partN" number out of a CSV filename so
@@ -191,6 +239,7 @@ func japanesePartLabel(name string) string {
 func loadJapaneseWords() {
 	outWords := make(map[string][]JapaneseWord, len(japaneseCategories))
 	outParts := make(map[string][]japanesePart, len(japaneseCategories))
+	outKana := make(map[string][]japanesePart, len(japaneseCategories))
 	total := 0
 	for _, cat := range japaneseCategories {
 		parts, err := loadJapaneseCategory(cat)
@@ -204,15 +253,19 @@ func loadJapaneseWords() {
 		}
 		outWords[cat.ID] = flat
 		outParts[cat.ID] = parts
+		if groups := loadJapaneseKanaGroups(cat); len(groups) > 0 {
+			outKana[cat.ID] = groups
+		}
 		total += len(flat)
 	}
 
 	japaneseMu.Lock()
 	japaneseWords = outWords
 	japaneseParts = outParts
+	japaneseKana = outKana
 	japaneseMu.Unlock()
 
-	log.Printf("[japanese] loaded %d words across %d categories", total, len(outWords))
+	log.Printf("[japanese] loaded %d words across %d categories (%d with 五十音 index)", total, len(outWords), len(outKana))
 }
 
 func ensureJapaneseWordsLoaded() {
@@ -343,6 +396,90 @@ func japaneseCategoriesHandler() http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		json.NewEncoder(w).Encode(out)
+	}
+}
+
+// japaneseKanaInfo is returned by /japanese/kana-letters
+type japaneseKanaInfo struct {
+	Kana  string `json:"kana"`  // e.g. "あ", passed back as ?kana=
+	Count int    `json:"count"`
+}
+
+// japaneseKanaLettersHandler – GET /japanese/kana-letters?category=X →
+// [{kana,count}] in gojūon order. Empty list for categories without a 五十音 copy.
+func japaneseKanaLettersHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeCORSHeaders(w)
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.Method != http.MethodGet {
+			http.Error(w, "only GET is allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		ensureJapaneseWordsLoaded()
+
+		category := r.URL.Query().Get("category")
+		if category == "" {
+			http.Error(w, "missing category parameter", http.StatusBadRequest)
+			return
+		}
+
+		japaneseMu.RLock()
+		groups := japaneseKana[category]
+		out := make([]japaneseKanaInfo, 0, len(groups))
+		for _, g := range groups {
+			out = append(out, japaneseKanaInfo{Kana: g.Name, Count: len(g.Words)})
+		}
+		japaneseMu.RUnlock()
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		json.NewEncoder(w).Encode(out)
+	}
+}
+
+// japaneseKanaWordsHandler – GET /japanese/kana-words?category=X&kana=あ → words
+func japaneseKanaWordsHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeCORSHeaders(w)
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.Method != http.MethodGet {
+			http.Error(w, "only GET is allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		ensureJapaneseWordsLoaded()
+
+		category := r.URL.Query().Get("category")
+		kana := r.URL.Query().Get("kana")
+		if category == "" || kana == "" {
+			http.Error(w, "missing category or kana", http.StatusBadRequest)
+			return
+		}
+
+		japaneseMu.RLock()
+		var words []JapaneseWord
+		found := false
+		for _, g := range japaneseKana[category] {
+			if g.Name == kana {
+				words = g.Words
+				found = true
+				break
+			}
+		}
+		japaneseMu.RUnlock()
+		if !found {
+			http.Error(w, "unknown category/kana", http.StatusNotFound)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		json.NewEncoder(w).Encode(words)
 	}
 }
 
