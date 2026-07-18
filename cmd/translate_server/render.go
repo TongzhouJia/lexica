@@ -128,7 +128,7 @@ func renderSuccess(text, translated, sl, tl string, alreadySaved bool) string {
               background:linear-gradient(90deg,#a78bfa,#60a5fa);
               -webkit-background-clip:text;-webkit-text-fill-color:transparent;">%s</p>
     <hr style="border:none;border-top:1px solid rgba(255,255,255,0.1);margin:20px 0;">
-    <p style="font-size:36px;font-weight:400;margin:0;color:#c4b5fd;">%s</p>
+    <p id="translation" style="font-size:36px;font-weight:400;margin:0;color:#c4b5fd;">%s</p>
     <div style="margin-top:28px; display:flex; justify-content:center; gap:16px; flex-wrap:wrap;">
       %s
       %s

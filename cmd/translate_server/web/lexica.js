@@ -907,12 +907,15 @@ document.addEventListener('keydown', (e) => {
 async function saveToMistakeBook() {
   if (!currentWord) return;
 
-  // Try to read translation text from iframe (works if same-origin)
+  // Read ONLY the translation text from the iframe (works if same-origin).
+  // The translate page tags it with id="translation"; grabbing the whole body
+  // would pull in "EN → ZH-CN", the Play button, etc.
   let translated = '';
   try {
     const doc = popupFrame.contentDocument;
-    if (doc && doc.body) {
-      translated = (doc.body.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+    const el = doc && doc.getElementById('translation');
+    if (el) {
+      translated = (el.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 300);
     }
   } catch (_) { /* cross-origin */ }
 
