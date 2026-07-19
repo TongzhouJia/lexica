@@ -1574,7 +1574,7 @@ function learnShowQuestion() {
   const current = s.currentIdx + 1;
   const pct = ((current - 1) / total * 100).toFixed(1);
 
-  const rHint = Boolean(word.kana && word.kana !== word.english) ? 'R=重听/假名' : 'R=重听';
+  const rHint = Boolean(word.kana && word.kana !== word.english) ? 'R=重听 · F=假名' : 'R=重听';
 
   learnBody.innerHTML = `
 <div class="recog-question">
@@ -1602,7 +1602,6 @@ function learnShowQuestion() {
   const toggleKana = makeKanaToggler(word, 'learn-english');
   function replay() {
     playWordAudio(word);
-    if (toggleKana) toggleKana();
   }
 
   let revealed = false;
@@ -1685,6 +1684,9 @@ function learnShowQuestion() {
     } else if (e.key === 'r' || e.key === 'R') {
       e.preventDefault();
       replay();
+    } else if (e.key === 'f' || e.key === 'F') {
+      e.preventDefault();
+      if (toggleKana) toggleKana();
     } else if (e.key === 'Escape') {
       e.preventDefault();
       earlyExit();
@@ -2152,7 +2154,7 @@ function recogShowQuestion() {
   const furiganaRevealHTML = showFurigana
     ? `<span class="recog-furigana-reveal">${escapeHTML(word.kana)}</span>`
     : '';
-  const rHint = showFurigana ? 'R=重听/假名' : 'R=重听';
+  const rHint = showFurigana ? 'R=重听 · F=假名' : 'R=重听';
 
   recogBody.innerHTML = `
 <div class="recog-question">
@@ -2181,7 +2183,6 @@ function recogShowQuestion() {
   const toggleKana = makeKanaToggler(word, 'recog-english');
   function replay() {
     playWordAudio(word);
-    if (toggleKana) toggleKana();
   }
 
   let revealed = false;
@@ -2266,6 +2267,9 @@ function recogShowQuestion() {
     } else if (e.key === 'r' || e.key === 'R') {
       e.preventDefault();
       replay();
+    } else if (e.key === 'f' || e.key === 'F') {
+      e.preventDefault();
+      if (toggleKana) toggleKana();
     } else if (e.key === 'Escape') {
       e.preventDefault();
       earlyExit();
@@ -2611,7 +2615,7 @@ function studyShowCard() {
   // makeKanaToggler). Pure-kana categories (全平假名词/全片假名词) have no
   // separate reading, so R stays replay-only there.
   const showFurigana = Boolean(word.kana && word.kana !== word.english);
-  const rHint = showFurigana ? 'R = 朗读 / 假名' : 'R = 朗读';
+  const rHint = showFurigana ? 'R = 朗读 · F = 假名' : 'R = 朗读';
 
   studyBody.innerHTML = `
 <div class="recog-question">
@@ -2648,14 +2652,13 @@ function studyShowCard() {
     studyBindKeys(null);
     studyShowSummary();
   }
-  // R: always replay the audio; if this word has a kana reading, also flip the
-  // displayed word between its kanji form and that reading (default = kanji).
-  function replayAndToggleKana() {
+  // R replays the audio; F flips the displayed word between its kanji form and
+  // its kana reading (default = kanji).
+  function replay() {
     playWordAudio(word);
-    if (toggleKana) toggleKana();
   }
 
-  $('study-replay-btn').addEventListener('click', replayAndToggleKana);
+  $('study-replay-btn').addEventListener('click', replay);
   $('study-yes-btn').addEventListener('click', () => grade(true));
   $('study-no-btn').addEventListener('click', () => grade(false));
   $('study-exit-btn').addEventListener('click', earlyExit);
@@ -2669,7 +2672,10 @@ function studyShowCard() {
       grade(false);
     } else if (e.key === 'r' || e.key === 'R') {
       e.preventDefault();
-      replayAndToggleKana();
+      replay();
+    } else if (e.key === 'f' || e.key === 'F') {
+      e.preventDefault();
+      if (toggleKana) toggleKana();
     } else if (e.key === 'Escape') {
       e.preventDefault();
       earlyExit();
@@ -3353,11 +3359,19 @@ function dictShowQuestionUltimate() {
 
 // ---- CSV helpers ----
 function dictWordsToCSV(words) {
-  let csv = appLang === 'ja' ? '\uFEFF\u65E5\u6587,\u4E2D\u6587\n' : '\uFEFFEnglish,Chinese\n';
+  // Japanese exports use the same 4-column shape the \u7C98\u8D34 CSV screen parses
+  // (\u65E5\u6587,\u5047\u540D,\u4E2D\u6587,\u97F3\u9891), so a copied result can be pasted straight back in.
+  const q = (v) => `"${String(v || '').replace(/"/g, '""')}"`;
+  if (appLang === 'ja') {
+    let csv = '\uFEFF\u65E5\u6587,\u5047\u540D,\u4E2D\u6587,\u97F3\u9891\n';
+    for (const w of words) {
+      csv += `${q(w.english)},${q(w.kana)},${q(w.chinese)},${q(w.audio)}\n`;
+    }
+    return csv;
+  }
+  let csv = '\uFEFFEnglish,Chinese\n';
   for (const w of words) {
-    const en = w.english.replace(/"/g, '""');
-    const zh = w.chinese.replace(/"/g, '""');
-    csv += `"${en}","${zh}"\n`;
+    csv += `${q(w.english)},${q(w.chinese)}\n`;
   }
   return csv;
 }
