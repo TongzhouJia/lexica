@@ -136,6 +136,9 @@ function setAppLang(lang) {
   appLang = lang;
   localStorage.setItem('lexica.lang', lang);
   applyLangUI();
+  // The progress boards are per-language; re-apply so the picker offers the
+  // right one and the new language's own saved board comes back.
+  applyBackground(savedBackground());
   // Land on a clean home screen: close any open practice panel, drop the
   // active tab (the set of tabs differs per language), and clear the pending
   // Japanese category so the user picks fresh.
@@ -3991,14 +3994,36 @@ function renderSunBackground() {
 const BG_KEY = 'lexica-bg';
 let currentBackground = 'sun';
 
+// `lang` restricts an option to one app language — the 字母进度 board is an
+// English-vocabulary tracker and 五十音进度 a Japanese one, so each only shows
+// in the picker while that language is active.
 const BG_OPTIONS = [
   { id: 'sun',     icon: '🌅', label: '日出日落' },
-  { id: 'letters', icon: '🔤', label: '字母进度' },
+  { id: 'letters', icon: '🔤', label: '字母进度', lang: 'en' },
+  { id: 'kana',    icon: '🇯🇵', label: '五十音进度', lang: 'ja' },
 ];
 
+const BG_IDS = BG_OPTIONS.map(o => o.id);
+
+// The board choice for the language currently active. Falls back to the old
+// single-key value so an existing 字母进度 preference survives the upgrade.
+function savedBackground() {
+  try {
+    return localStorage.getItem(`${BG_KEY}.${appLang}`)
+      || (appLang === 'en' ? localStorage.getItem(BG_KEY) : null)
+      || 'sun';
+  } catch (_) { return 'sun'; }
+}
+
 function applyBackground(name) {
-  currentBackground = (name === 'letters') ? 'letters' : 'sun';
-  try { localStorage.setItem(BG_KEY, currentBackground); } catch (_) {}
+  currentBackground = BG_IDS.includes(name) ? name : 'sun';
+  // A board belonging to the other language would render an empty/irrelevant
+  // tracker, so fall back to the sun wallpaper instead.
+  const opt = BG_OPTIONS.find(o => o.id === currentBackground);
+  if (opt && opt.lang && opt.lang !== appLang) currentBackground = 'sun';
+  // Remembered per language, so picking 五十音 in Japanese doesn't wipe the
+  // 字母进度 choice waiting on the English side.
+  try { localStorage.setItem(`${BG_KEY}.${appLang}`, currentBackground); } catch (_) {}
 
   const host = $('status');
   const mainEl = document.querySelector('main');
@@ -4008,16 +4033,68 @@ function applyBackground(name) {
   // #status is always visible (behind any panel).
   host.style.display = 'block';
 
-  if (currentBackground === 'letters') {
+  if (currentBackground === 'letters' || currentBackground === 'kana') {
     mainEl.classList.add('sun-bleed');
     host.classList.remove('sun-host');
     host.classList.add('letter-host');
-    renderLetterBackground(host);
+    if (currentBackground === 'kana') renderKanaBackground(host);
+    else renderLetterBackground(host);
   } else {
     host.classList.remove('letter-host');
     renderSunBackground(); // re-adds sun-bleed + sun-host and paints
   }
   updateBgPickerLabel();
+}
+
+// ---- Server-backed check-in trackers ------------------------------------
+// Both home-screen boards (26 letters, 五十音) persist their tick marks through
+// /tracker/*, keyed by a short tracker id. Progress used to sit in localStorage
+// and so was lost whenever the user opened Lexica in another browser.
+
+// loadTracker returns the server's flag map for `id`. `legacyJSON` is the old
+// localStorage value, if any: when the server has nothing yet but the browser
+// does, the local progress is migrated up once so nobody loses their ticks.
+async function loadTracker(id, legacyJSON) {
+  let legacy = null;
+  if (legacyJSON) {
+    try { legacy = JSON.parse(legacyJSON); } catch (_) { legacy = null; }
+  }
+  try {
+    const res = await fetch(`${apiBase()}/tracker/get?id=${encodeURIComponent(id)}`);
+    if (!res.ok) throw new Error('load failed');
+    const doc = await res.json();
+    const checked = (doc && doc.checked) || {};
+    if (!Object.keys(checked).length && legacy && Object.keys(legacy).length) {
+      await saveTracker(id, legacy);
+      return legacy;
+    }
+    return checked;
+  } catch (_) {
+    // Offline / server down: fall back to whatever the browser remembers so the
+    // board still works, just without cross-browser sync.
+    return legacy || {};
+  }
+}
+
+// Saves are queued per tracker id. Each POST carries the whole flag map, so two
+// in flight at once could land out of order and let a stale snapshot win —
+// chaining them keeps the last click the last write.
+const trackerSaveQueue = new Map();
+
+function saveTracker(id, checked) {
+  const snapshot = { ...checked };
+  const prev = trackerSaveQueue.get(id) || Promise.resolve();
+  const next = prev.then(async () => {
+    try {
+      await fetch(`${apiBase()}/tracker/set`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, checked: snapshot }),
+      });
+    } catch (_) {}
+  });
+  trackerSaveQueue.set(id, next);
+  return next;
 }
 
 // ---- Letter check-in tracker (ported 1:1 from the React artifact) ----
@@ -4044,10 +4121,19 @@ const LT_ICON_CIRCLE = '<svg class="lt-icon" viewBox="0 0 24 24" fill="none" str
 
 function renderLetterBackground(host) {
   let checked = {};
-  try { checked = JSON.parse(localStorage.getItem('wordTrackerProgress') || '{}') || {}; } catch (_) { checked = {}; }
+
+  // Progress lives on the server (see tracker.go) so it follows the user across
+  // browsers. Nothing is painted until it arrives: a clickable board built on a
+  // not-yet-loaded (empty) map would let one tick save over real progress.
+  host.innerHTML = `<div class="lt-board"><div class="lt-footer">正在加载 字母 进度…</div></div>`;
+
+  loadTracker('letters', localStorage.getItem('wordTrackerProgress')).then(remote => {
+    checked = remote;
+    paint();
+  });
 
   function save() {
-    try { localStorage.setItem('wordTrackerProgress', JSON.stringify(checked)); } catch (_) {}
+    saveTracker('letters', checked);
   }
 
   function paint() {
@@ -4104,8 +4190,134 @@ function renderLetterBackground(host) {
       if (window.confirm('确定要清空所有进度重新开始吗？')) { checked = {}; save(); paint(); }
     });
   }
+}
 
-  paint();
+// ---- 五十音 check-in tracker (Japanese counterpart of the letter board) ----
+// One row per initial kana, with a button per kanji-bearing category:
+//   1_全汉字词        — 纯汉字词
+//   4_平假名汉字混合词 — 汉字+假名混合词
+// Only these two categories have a 五十音 index (the all-kana categories have no
+// kanji to sort by), so only they are tracked here. Word counts come from
+// /japanese/kana-letters, the same endpoint the 五十音 study source uses.
+const KANA_CATS = [
+  { id: '1_全汉字词', label: '汉字', full: '纯汉字词' },
+  { id: '4_平假名汉字混合词', label: '混合', full: '汉字+假名混合词' },
+];
+
+const kanaKey = (catId, kana) => `${catId}|${kana}`;
+
+// Fetches per-kana counts for both categories and merges them into one ordered
+// row list: [{kana, counts: {catId: n}}], in gojūon order.
+async function loadKanaRows() {
+  const lists = await Promise.all(KANA_CATS.map(async cat => {
+    const res = await fetch(`${apiBase()}/japanese/kana-letters?category=${encodeURIComponent(cat.id)}`);
+    if (!res.ok) throw new Error(`加载失败：${cat.full}`);
+    return { cat, letters: await res.json() };
+  }));
+  const rows = [];
+  const byKana = new Map();
+  lists.forEach(({ cat, letters }) => {
+    (letters || []).forEach(({ kana, count }) => {
+      let row = byKana.get(kana);
+      if (!row) {
+        row = { kana, counts: {} };
+        byKana.set(kana, row);
+        rows.push(row);
+      }
+      row.counts[cat.id] = count;
+    });
+  });
+  // Both category listings are already in gojūon order; sorting the merged list
+  // by codepoint keeps that order when one category is missing a kana.
+  rows.sort((a, b) => a.kana.localeCompare(b.kana, 'ja'));
+  return rows;
+}
+
+function renderKanaBackground(host) {
+  let checked = {};
+  let rows = [];
+
+  host.innerHTML = `<div class="lt-board"><div class="lt-footer">正在加载 五十音 进度…</div></div>`;
+
+  Promise.all([loadTracker('kana', null), loadKanaRows()])
+    .then(([remoteChecked, remoteRows]) => {
+      checked = remoteChecked;
+      rows = remoteRows;
+      paint();
+    })
+    .catch(err => {
+      host.innerHTML = `<div class="lt-board"><div class="lt-footer">❌ ${err.message}</div></div>`;
+    });
+
+  function save() { saveTracker('kana', checked); }
+
+  function totals() {
+    let total = 0, done = 0;
+    rows.forEach(row => {
+      KANA_CATS.forEach(cat => {
+        const n = row.counts[cat.id] || 0;
+        total += n;
+        if (checked[kanaKey(cat.id, row.kana)]) done += n;
+      });
+    });
+    return { total, done };
+  }
+
+  function paint() {
+    const { total, done } = totals();
+    const pct = total === 0 ? '0' : ((done / total) * 100).toFixed(1);
+
+    const cards = rows.map(row => {
+      const btns = KANA_CATS.map(cat => {
+        const n = row.counts[cat.id] || 0;
+        const on = !!checked[kanaKey(cat.id, row.kana)];
+        const cls = 'kn-btn' + (on ? ' checked' : '') + (n === 0 ? ' zero' : '');
+        return `<button class="${cls}" data-kana="${row.kana}" data-cat="${cat.id}" title="${cat.full} · ${n} 词"${n === 0 ? ' disabled' : ''}>
+          <span class="kn-btn-label">${cat.label}</span>
+          <span class="kn-btn-count">${n}</span>
+        </button>`;
+      }).join('');
+      const rowDone = KANA_CATS.every(cat => (row.counts[cat.id] || 0) === 0 || checked[kanaKey(cat.id, row.kana)]);
+      return `<div class="kn-card${rowDone ? ' checked' : ''}">
+        <div class="kn-kana">${row.kana}</div>
+        <div class="kn-btns">${btns}</div>
+      </div>`;
+    }).join('');
+
+    host.innerHTML = `
+<div class="lt-board">
+  <div class="lt-header-card">
+    <div class="lt-header-row">
+      <div>
+        <h1 class="lt-title">五十音通关打卡</h1>
+        <p class="lt-sub">每个音两栏：纯汉字词 / 汉字+假名混合词</p>
+      </div>
+      <button class="lt-reset" id="kn-reset">重置进度</button>
+    </div>
+    <div class="lt-progress-row">
+      <div class="lt-pct">${pct}%</div>
+      <div class="lt-fraction">已完成 ${done} / <span class="lt-total">${total} 词</span></div>
+    </div>
+    <div class="lt-bar"><div class="lt-bar-fill" style="width:${pct}%"></div></div>
+  </div>
+  <div class="kn-grid">${cards}</div>
+  <div class="lt-footer">点击「汉字」或「混合」按钮进行打卡，进度自动保存到服务器。</div>
+</div>
+    `;
+
+    host.querySelectorAll('.kn-btn').forEach(el => {
+      el.addEventListener('click', () => {
+        const k = kanaKey(el.dataset.cat, el.dataset.kana);
+        checked[k] = !checked[k];
+        save();
+        paint();
+      });
+    });
+    const resetBtn = host.querySelector('#kn-reset');
+    if (resetBtn) resetBtn.addEventListener('click', () => {
+      if (window.confirm('确定要清空所有五十音进度重新开始吗？')) { checked = {}; save(); paint(); }
+    });
+  }
 }
 
 // ---- Sidebar background picker ----
@@ -4117,6 +4329,8 @@ function updateBgPickerLabel() {
   }
   document.querySelectorAll('.bg-picker-opt').forEach(b => {
     b.classList.toggle('active', b.dataset.bg === currentBackground);
+    const opt = BG_OPTIONS.find(o => o.id === b.dataset.bg);
+    b.classList.toggle('hidden', !!(opt && opt.lang && opt.lang !== appLang));
   });
 }
 
@@ -4142,10 +4356,7 @@ function setupBackgroundPicker() {
     if (!menu.classList.contains('hidden') && !menu.contains(e.target) && e.target !== btn) closeMenu();
   });
 
-  // Initial background from saved choice (default: sun).
-  let saved = 'sun';
-  try { saved = localStorage.getItem(BG_KEY) || 'sun'; } catch (_) {}
-  applyBackground(saved);
+  applyBackground(savedBackground());
 }
 
 setupBackgroundPicker();

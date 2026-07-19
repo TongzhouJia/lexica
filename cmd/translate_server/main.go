@@ -158,6 +158,7 @@ func main() {
 	http.HandleFunc("/clean", cleanHandler())
 	http.HandleFunc("/clean/sync", cleanSyncHandler())
 	http.HandleFunc("/progress/", progressHandler())
+	http.HandleFunc("/tracker/", trackerHandler())
 	http.HandleFunc("/progress.js", lexicaAssetHandler("progress.js", "application/javascript; charset=utf-8"))
 	http.HandleFunc("/japanese/words", japaneseWordsHandler())
 	http.HandleFunc("/japanese/parts", japanesePartsHandler())

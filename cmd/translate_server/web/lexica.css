@@ -1109,6 +1109,93 @@ main.sun-bleed {
   padding-top: 4px;
 }
 
+/* 五十音 board — one card per kana, two check-in buttons inside each
+   (纯汉字词 / 汉字+假名混合词). Denser than the 26-letter grid: ~46 kana. */
+/* Sized off the container, not the viewport: the sidebar eats a variable slice
+   of the window, so viewport breakpoints overflow the board. 150px is the
+   widest a card needs (kana + 「汉字 213」 + 「混合 142」). */
+.kn-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.kn-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 10px;
+  border-radius: 14px;
+  border: 2px solid #e2e8f0;
+  background: #ffffff;
+  color: #334155;
+  user-select: none;
+  transition: all 0.2s;
+}
+
+.kn-card.checked {
+  background: #eef2ff;
+  border-color: #818cf8;
+  color: #312e81;
+}
+
+.kn-kana {
+  font-size: 26px;
+  font-weight: 900;
+  line-height: 1;
+  text-align: center;
+}
+
+.kn-btns {
+  display: flex;
+  gap: 6px;
+}
+
+.kn-btn {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 4px;
+  white-space: nowrap; /* keep 「汉字」/「混合」 on one line in the narrow button */
+  padding: 5px 4px;
+  border-radius: 9px;
+  border: 1.5px solid #e2e8f0;
+  background: #f8fafc;
+  color: #64748b;
+  font: inherit;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.kn-btn:hover:not(:disabled) {
+  border-color: #a5b4fc;
+  color: #4f46e5;
+}
+
+.kn-btn.checked {
+  background: #6366f1;
+  border-color: #6366f1;
+  color: #ffffff;
+}
+
+.kn-btn.zero,
+.kn-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.kn-btn-label {
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.kn-btn-count {
+  font-size: 10px;
+  opacity: 0.8;
+}
+
 /* Document content */
 #content {
   display: none;
