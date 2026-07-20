@@ -1121,6 +1121,8 @@ main.sun-bleed {
 }
 
 .kn-card {
+  position: relative;
+  overflow: hidden; /* clip the check-in halves to the 14px radius */
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1139,7 +1141,37 @@ main.sun-bleed {
   color: #312e81;
 }
 
+/* Check-in hit zones: the blank area inside the card but outside the buttons,
+   split down the middle — left = 汉字, right = 混合. They sit *behind* the
+   card content (z-index 0), so the buttons keep their own click target while
+   every other pixel of the card checks its side in. */
+.kn-half {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 50%;
+  z-index: 0;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.kn-half-left  { left: 0; }
+.kn-half-right { right: 0; }
+
+.kn-half.lit { background: #eef2ff; }
+
+.kn-half[data-empty] { cursor: default; }
+
+.kn-half:not([data-empty]):not(.lit):hover {
+  background: rgba(99, 102, 241, 0.07);
+}
+
+/* Content rides above the halves. The kana glyph and the button row's gaps let
+   clicks fall through, so "anywhere but a button" reaches the half underneath. */
 .kn-kana {
+  position: relative;
+  z-index: 1;
+  pointer-events: none;
   font-size: 26px;
   font-weight: 900;
   line-height: 1;
@@ -1147,11 +1179,15 @@ main.sun-bleed {
 }
 
 .kn-btns {
+  position: relative;
+  z-index: 1;
+  pointer-events: none;
   display: flex;
   gap: 6px;
 }
 
 .kn-btn {
+  pointer-events: auto; /* re-armed: .kn-btns above disables it for the gaps */
   flex: 1;
   min-width: 0;
   display: flex;
@@ -2718,6 +2754,42 @@ main.sun-bleed {
 .recog-english.word-as-kana {
   color: #fcd34d;
   letter-spacing: 0.06em;
+}
+
+/* 背单词·反向（中→日）：中文当题面，日语藏起来直到揭晓。 */
+.recog-english.recog-prompt-zh {
+  font-size: 1.9em;
+  color: #86efac;
+  letter-spacing: 0.06em;
+  text-shadow: 0 0 30px rgba(134, 239, 172, 0.18);
+}
+
+/* 揭晓出来的日语/英语答案——比中文小注解大，比题面稍小。 */
+.recog-answer-word {
+  font-size: 1.8em;
+  font-weight: 700;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  color: #f0fdf4;
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+  animation: fadeIn 0.2s ease;
+}
+
+.recog-answer-word.word-as-kana {
+  color: #fcd34d;
+  letter-spacing: 0.06em;
+}
+
+/* 题目底部：提前退出 + 方向切换并排。 */
+.recog-footer-row {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.learn-dir-tabs {
+  width: 100%;
 }
 
 /* Kana reading revealed next to the meaning in 认词 mode. */

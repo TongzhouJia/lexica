@@ -289,6 +289,16 @@ function escapeHTML(s) {
 // text between it and `word.kana`. Pure-kana categories (and every English
 // word) have no separate reading, so it returns null and the caller keeps R
 // as replay-only.
+// Fisher-Yates on a copy — the caller's array keeps its original order.
+function shuffleWords(list) {
+  const out = [...(list || [])];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
 function makeKanaToggler(word, elId) {
   if (!word || !word.kana || word.kana === word.english) return null;
   const el = $(elId);
@@ -1077,9 +1087,14 @@ JAPANESE_CATEGORIES.forEach((cat, i) => {
   if (tab) tab.addEventListener('click', () => openJapaneseCategory(cat, tab));
 });
 
-function openJapaneseCategory(cat, tabBtn) {
+// Brings the 学习 panel forward for a Japanese category without deciding what
+// to render into it. Shared by the sidebar tabs (which then show the setup
+// screen) and the 五十音 board's click-to-practice shortcut (which jumps
+// straight into a session).
+function focusLearnPanelForCategory(cat, tabBtn) {
   jaActiveCategory = cat;
-  setActiveTab(tabBtn);
+  const idx = JAPANESE_CATEGORIES.indexOf(cat);
+  setActiveTab(tabBtn || $(`tab-ja-cat-${idx}`));
   showSidebarContent('learn');
   learnPanel.classList.add('visible');
   dictPanel.classList.remove('visible');
@@ -1088,6 +1103,10 @@ function openJapaneseCategory(cat, tabBtn) {
   exitTableNav();
   readerPanel.classList.remove('visible');
   $('learn-title').textContent = cat.label;
+}
+
+function openJapaneseCategory(cat, tabBtn) {
+  focusLearnPanelForCategory(cat, tabBtn);
   learnState.words = [];
   learnShowJapaneseSetup(cat);
 }
@@ -1116,6 +1135,50 @@ let learnState = {
   allWords: [],
   baseDayName: '',
 };
+
+// 背单词方向。
+//   false（默认）: 日/英 → 中 —— 显示日语，进入即朗读，揭晓中文。
+//   true          : 中 → 日/英 —— 显示中文并盖住日语，不朗读；
+//                   只有揭晓日语之后才播放（也才能按 R 重听）。
+let learnReverse = localStorage.getItem('lexica.learnReverse') === '1';
+
+function setLearnReverse(on) {
+  learnReverse = !!on;
+  localStorage.setItem('lexica.learnReverse', learnReverse ? '1' : '0');
+}
+
+// Direction labels adapt to the active language ('日→中' vs '英→中').
+function learnDirLabels() {
+  const src = appLang === 'ja' ? '日' : '英';
+  return { forward: `${src}→中`, reverse: `中→${src}` };
+}
+
+// The 日→中 / 中→日 switcher, shared by the portion picker and the question
+// screen. `onChange` is called only when the direction actually flips.
+function learnDirTabsHTML(idPrefix) {
+  const L = learnDirLabels();
+  return `
+<div class="dict-source-tabs learn-dir-tabs">
+  <button class="dict-source-tab${learnReverse ? '' : ' active'}" id="${idPrefix}-fwd">${L.forward}</button>
+  <button class="dict-source-tab${learnReverse ? ' active' : ''}" id="${idPrefix}-rev">${L.reverse}</button>
+</div>`;
+}
+
+function bindLearnDirTabs(idPrefix, onChange) {
+  const fwd = $(`${idPrefix}-fwd`);
+  const rev = $(`${idPrefix}-rev`);
+  if (!fwd || !rev) return;
+  fwd.addEventListener('click', () => {
+    if (!learnReverse) return;
+    setLearnReverse(false);
+    onChange();
+  });
+  rev.addEventListener('click', () => {
+    if (learnReverse) return;
+    setLearnReverse(true);
+    onChange();
+  });
+}
 
 learnCloseBtn.addEventListener('click', () => {
   learnPanel.classList.remove('visible');
@@ -1459,6 +1522,7 @@ function showJapanesePasteCSVScreen(bodyEl, onBack, onLoaded) {
   <div class="recog-summary-actions">
     <button class="dict-back-btn" id="ja-paste-csv-back">← 返回</button>
     <button class="dict-start-btn" id="ja-paste-csv-load">加载</button>
+    <button class="dict-start-btn" id="ja-paste-csv-shuffle">🔀 加载并打乱</button>
   </div>
   <div class="dict-loading" id="ja-paste-csv-msg"></div>
 </div>
@@ -1469,21 +1533,23 @@ function showJapanesePasteCSVScreen(bodyEl, onBack, onLoaded) {
 
   bodyEl.querySelector('#ja-paste-csv-back').addEventListener('click', onBack);
 
-  function go() {
+  function go(shuffle) {
     const text = textarea.value.trim();
     if (!text) {
       loadMsg.textContent = '❌ 请粘贴 CSV 内容';
       return;
     }
     try {
-      const words = parseJapaneseCSVText(text);
-      if (!words || !words.length) throw new Error('未能解析出任何词，请检查格式');
-      onLoaded(words, `粘贴(${words.length}词)`);
+      const parsed = parseJapaneseCSVText(text);
+      if (!parsed || !parsed.length) throw new Error('未能解析出任何词，请检查格式');
+      const words = shuffle ? shuffleWords(parsed) : parsed;
+      onLoaded(words, `粘贴${shuffle ? '·乱序' : ''}(${words.length}词)`);
     } catch (err) {
       loadMsg.textContent = `❌ ${err.message}`;
     }
   }
-  bodyEl.querySelector('#ja-paste-csv-load').addEventListener('click', go);
+  bodyEl.querySelector('#ja-paste-csv-load').addEventListener('click', () => go(false));
+  bodyEl.querySelector('#ja-paste-csv-shuffle').addEventListener('click', () => go(true));
 }
 
 // ---- Learn Portion Picker ----
@@ -1521,9 +1587,13 @@ function learnShowPortionPicker(allWords, dayName) {
 <div class="dict-setup">
   <div class="dict-setup-label">${escapeHTML(dayName)} · 选择学习范围</div>
   <div class="dict-portion-grid" id="learn-portion-grid">${html}</div>
+  <div class="dict-setup-label">背诵方向</div>
+  ${learnDirTabsHTML('learn-dir')}
   <button class="dict-back-btn" id="learn-back-btn">← 返回选择天数</button>
 </div>
   `;
+
+  bindLearnDirTabs('learn-dir', () => learnShowPortionPicker(allWords, dayName));
 
   const grid = $('learn-portion-grid');
   for (let i = 0; i < portions.length; i++) {
@@ -1577,7 +1647,26 @@ function learnShowQuestion() {
   const current = s.currentIdx + 1;
   const pct = ((current - 1) / total * 100).toFixed(1);
 
-  const rHint = Boolean(word.kana && word.kana !== word.english) ? 'R=重听 · F=假名' : 'R=重听';
+  // 反向模式（中→日）：中文当题面，日语藏在揭晓行里，揭晓前不发音。
+  const rev = learnReverse;
+  const canKana = Boolean(word.kana && word.kana !== word.english);
+  const rHint = canKana ? 'R=重听 · F=假名' : 'R=重听';
+  // 正向进入即朗读，所以一开始就能提示 R；反向要等揭晓后才有音。
+  const hintBefore = rev
+    ? '回车=认识 · 空格=不认识 · Esc=提前退出'
+    : `回车=认识 · 空格=不认识 · ${rHint} · Esc=提前退出`;
+  const hintAfter = `回车=认对 · 空格=认错 · ${rHint} · Esc=提前退出`;
+  const L = learnDirLabels();
+
+  const promptHTML = rev
+    ? `<div class="recog-english recog-prompt-zh" id="learn-english">${escapeHTML(word.chinese)}</div>`
+    : `<div class="recog-english" id="learn-english">${escapeHTML(word.english)}</div>`;
+
+  const revealHTML = rev
+    ? `<span class="recog-answer-word" id="learn-answer">${escapeHTML(word.english)}</span>
+       <button class="recog-edit-btn" id="learn-edit-btn" title="修改翻译">✎</button>`
+    : `<span class="recog-chinese-reveal" id="learn-chinese">${escapeHTML(word.chinese)}</span>
+       <button class="recog-edit-btn" id="learn-edit-btn" title="修改翻译">✎</button>`;
 
   learnBody.innerHTML = `
 <div class="recog-question">
@@ -1585,51 +1674,61 @@ function learnShowQuestion() {
   <div class="recog-progress-bar">
     <div class="recog-progress-fill" style="width: ${pct}%"></div>
   </div>
-  <div class="recog-english" id="learn-english">${escapeHTML(word.english)}</div>
-  <button class="dict-play-btn recog-replay-btn" id="learn-replay-btn">🔊 重听</button>
+  ${promptHTML}
+  <button class="dict-play-btn recog-replay-btn" id="learn-replay-btn"${rev ? ' style="visibility:hidden"' : ''}>🔊 重听</button>
   <div class="recog-reveal-row" id="learn-reveal-row" style="visibility:hidden">
-    <span class="recog-chinese-reveal" id="learn-chinese">${escapeHTML(word.chinese)}</span>
-    <button class="recog-edit-btn" id="learn-edit-btn" title="修改翻译">✎</button>
+    ${revealHTML}
   </div>
   <div class="recog-btn-row" id="learn-btn-row">
     <button class="recog-no-btn" id="learn-no-btn">✗</button>
     <button class="recog-yes-btn" id="learn-yes-btn">✓</button>
   </div>
-  <div class="recog-hint" id="learn-hint">回车=认识 · 空格=不认识 · ${rHint} · Esc=提前退出</div>
-  <button class="recog-exit-btn" id="learn-exit-btn">⏏ 提前退出</button>
+  <div class="recog-hint" id="learn-hint">${hintBefore}</div>
+  <div class="recog-footer-row">
+    <button class="recog-exit-btn" id="learn-exit-btn">⏏ 提前退出</button>
+    <button class="recog-exit-btn" id="learn-dir-btn" title="切换方向">🔄 ${rev ? L.reverse : L.forward}</button>
+  </div>
 </div>
   `;
 
-  playWordAudio(word);
+  // 反向模式先不出声——中文题面不朗读，等揭晓日语再播。
+  if (!rev) playWordAudio(word);
 
-  const toggleKana = makeKanaToggler(word, 'learn-english');
-  function replay() {
-    playWordAudio(word);
-  }
+  const toggleKana = makeKanaToggler(word, rev ? 'learn-answer' : 'learn-english');
 
   let revealed = false;
   let graded = false;
   let firstKnown = null;
+
+  function replay() {
+    // 反向模式揭晓前禁止播放，否则等于直接把答案念出来。
+    if (rev && !revealed) return;
+    playWordAudio(word);
+  }
 
   const revealRow = $('learn-reveal-row');
   const btnRow = $('learn-btn-row');
   const hintEl = $('learn-hint');
   const replayBtn = $('learn-replay-btn');
   const editBtn = $('learn-edit-btn');
-  const chineseEl = $('learn-chinese');
+  const chineseEl = rev ? $('learn-english') : $('learn-chinese');
 
   function reveal(claimedKnown) {
     if (revealed) return;
     revealed = true;
     firstKnown = claimedKnown;
     revealRow.style.visibility = '';
+    if (rev) {
+      replayBtn.style.visibility = '';
+      playWordAudio(word);
+    }
     btnRow.innerHTML = `
       <button class="recog-no-btn" id="learn-wrong-btn">✗</button>
       <button class="recog-yes-btn" id="learn-right-btn">✓</button>
     `;
     $('learn-right-btn').addEventListener('click', () => grade(true));
     $('learn-wrong-btn').addEventListener('click', () => grade(false));
-    hintEl.textContent = `回车=认对 · 空格=认错 · ${rHint} · Esc=提前退出`;
+    hintEl.textContent = hintAfter;
   }
 
   function grade(gotRight) {
@@ -1671,11 +1770,19 @@ function learnShowQuestion() {
     }
   }
 
+  // 中途换方向：同一张卡按新方向重画，进度不丢。
+  function flipDirection() {
+    window.removeEventListener('keydown', onKey);
+    setLearnReverse(!learnReverse);
+    learnShowQuestion();
+  }
+
   $('learn-yes-btn').addEventListener('click', () => reveal(true));
   $('learn-no-btn').addEventListener('click',  () => reveal(false));
   $('learn-exit-btn').addEventListener('click', earlyExit);
+  $('learn-dir-btn').addEventListener('click', flipDirection);
   replayBtn.addEventListener('click', replay);
-  editBtn.addEventListener('click', editTranslation);
+  if (editBtn) editBtn.addEventListener('click', editTranslation);
 
   function onKey(e) {
     if (e.key === 'Enter') {
@@ -1689,7 +1796,8 @@ function learnShowQuestion() {
       replay();
     } else if (e.key === 'f' || e.key === 'F') {
       e.preventDefault();
-      if (toggleKana) toggleKana();
+      // 反向模式揭晓前不能翻假名——那也是答案。
+      if (toggleKana && !(rev && !revealed)) toggleKana();
     } else if (e.key === 'Escape') {
       e.preventDefault();
       earlyExit();
@@ -1949,6 +2057,7 @@ function showPasteCSVScreen(bodyEl, onBack, onLoaded) {
   <div class="recog-summary-actions">
     <button class="dict-back-btn" id="paste-csv-back">← 返回</button>
     <button class="dict-start-btn" id="paste-csv-load">加载</button>
+    <button class="dict-start-btn" id="paste-csv-shuffle">🔀 加载并打乱</button>
   </div>
   <div class="dict-loading" id="paste-csv-msg"></div>
 </div>
@@ -1959,21 +2068,23 @@ function showPasteCSVScreen(bodyEl, onBack, onLoaded) {
 
   bodyEl.querySelector('#paste-csv-back').addEventListener('click', onBack);
 
-  function go() {
+  function go(shuffle) {
     const text = textarea.value.trim();
     if (!text) {
       loadMsg.textContent = '❌ 请粘贴 CSV 内容';
       return;
     }
     try {
-      const words = parseCSVText(text);
-      if (!words || !words.length) throw new Error('未能解析出任何单词，请检查格式');
-      onLoaded(words, `粘贴(${words.length}词)`);
+      const parsed = parseCSVText(text);
+      if (!parsed || !parsed.length) throw new Error('未能解析出任何单词，请检查格式');
+      const words = shuffle ? shuffleWords(parsed) : parsed;
+      onLoaded(words, `粘贴${shuffle ? '·乱序' : ''}(${words.length}词)`);
     } catch (err) {
       loadMsg.textContent = `❌ ${err.message}`;
     }
   }
-  bodyEl.querySelector('#paste-csv-load').addEventListener('click', go);
+  bodyEl.querySelector('#paste-csv-load').addEventListener('click', () => go(false));
+  bodyEl.querySelector('#paste-csv-shuffle').addEventListener('click', () => go(true));
 }
 
 // ---- Recognition Setup Screen ----
@@ -4206,6 +4317,32 @@ const KANA_CATS = [
 
 const kanaKey = (catId, kana) => `${catId}|${kana}`;
 
+// 点卡片上的「汉字」/「混合」按钮 → 不再打卡，而是直接开背这个音下该类别的词：
+// 拉词 → 把 学习 面板推到前台 → 正向模式（显示日语、盖住中文）立刻开始第一张卡。
+async function startKanaPractice(catId, kana, btnEl) {
+  const cat = JAPANESE_CATEGORIES.find(c => c.id === catId);
+  if (!cat) return;
+  const labelEl = btnEl ? btnEl.querySelector('.kn-btn-label') : null;
+  const restore = labelEl ? labelEl.textContent : '';
+  if (labelEl) labelEl.textContent = '…';
+  if (btnEl) btnEl.disabled = true;
+  try {
+    const res = await fetch(`${apiBase()}/japanese/kana-words?category=${encodeURIComponent(catId)}&kana=${encodeURIComponent(kana)}`);
+    if (!res.ok) throw new Error(`加载失败：${kana}`);
+    const words = await res.json();
+    if (!words || !words.length) throw new Error(`${kana} 下没有词`);
+    setLearnReverse(false); // 这个入口固定走正向：显示日语、盖住中文
+    focusLearnPanelForCategory(cat);
+    const label = `${cat.label} · ${kana}`;
+    learnStartSession(words, label, words, label);
+  } catch (err) {
+    flash(`❌ ${err.message}`, true);
+  } finally {
+    if (labelEl) labelEl.textContent = restore;
+    if (btnEl) btnEl.disabled = false;
+  }
+}
+
 // Fetches per-kana counts for both categories and merges them into one ordered
 // row list: [{kana, counts: {catId: n}}], in gojūon order.
 async function loadKanaRows() {
@@ -4268,17 +4405,35 @@ function renderKanaBackground(host) {
     const pct = total === 0 ? '0' : ((done / total) * 100).toFixed(1);
 
     const cards = rows.map(row => {
-      const btns = KANA_CATS.map(cat => {
-        const n = row.counts[cat.id] || 0;
-        const on = !!checked[kanaKey(cat.id, row.kana)];
+      const state = KANA_CATS.map(cat => ({
+        cat,
+        n: row.counts[cat.id] || 0,
+        on: !!checked[kanaKey(cat.id, row.kana)],
+      }));
+
+      const btns = state.map(({ cat, n, on }) => {
         const cls = 'kn-btn' + (on ? ' checked' : '') + (n === 0 ? ' zero' : '');
-        return `<button class="${cls}" data-kana="${row.kana}" data-cat="${cat.id}" title="${cat.full} · ${n} 词"${n === 0 ? ' disabled' : ''}>
+        return `<button class="${cls}" data-kana="${row.kana}" data-cat="${cat.id}" title="${cat.full} · ${n} 词 · 点击直接开背"${n === 0 ? ' disabled' : ''}>
           <span class="kn-btn-label">${cat.label}</span>
           <span class="kn-btn-count">${n}</span>
         </button>`;
       }).join('');
-      const rowDone = KANA_CATS.every(cat => (row.counts[cat.id] || 0) === 0 || checked[kanaKey(cat.id, row.kana)]);
-      return `<div class="kn-card${rowDone ? ' checked' : ''}">
+
+      // 打卡热区：按钮之外、卡片之内的空白，左右对半分 —— 左=汉字，右=混合。
+      // 两侧都完成时整张卡上色，和改版前的观感一字不差；只完成一侧就只染那半边
+      // （所以 0 词的一侧永远不会自己先亮，卡片不会平白多出个半彩状态）。
+      const bothDone = state.every(s => s.n === 0 || s.on);
+      const halves = state.map((s, i) => {
+        const side = i === 0 ? 'left' : 'right';
+        const lit = bothDone || (s.n > 0 && s.on);
+        const empty = s.n === 0;
+        return `<div class="kn-half kn-half-${side}${lit ? ' lit' : ''}"
+          data-kana="${row.kana}" data-cat="${s.cat.id}"${empty ? ' data-empty="1"' : ''}
+          title="${empty ? `${s.cat.full} · 无词` : `${s.cat.full} · 点击打卡`}"></div>`;
+      }).join('');
+
+      return `<div class="kn-card${bothDone ? ' checked' : ''}">
+        ${halves}
         <div class="kn-kana">${row.kana}</div>
         <div class="kn-btns">${btns}</div>
       </div>`;
@@ -4301,12 +4456,20 @@ function renderKanaBackground(host) {
     <div class="lt-bar"><div class="lt-bar-fill" style="width:${pct}%"></div></div>
   </div>
   <div class="kn-grid">${cards}</div>
-  <div class="lt-footer">点击「汉字」或「混合」按钮进行打卡，进度自动保存到服务器。</div>
+  <div class="lt-footer">点「汉字」/「混合」按钮直接开背这个音的词；点卡片左右两侧空白处打卡（左=汉字，右=混合），进度自动保存到服务器。</div>
 </div>
     `;
 
     host.querySelectorAll('.kn-btn').forEach(el => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        startKanaPractice(el.dataset.cat, el.dataset.kana, el);
+      });
+    });
+
+    host.querySelectorAll('.kn-half').forEach(el => {
       el.addEventListener('click', () => {
+        if (el.dataset.empty) return; // 这一侧没词，无从打卡
         const k = kanaKey(el.dataset.cat, el.dataset.kana);
         checked[k] = !checked[k];
         save();
