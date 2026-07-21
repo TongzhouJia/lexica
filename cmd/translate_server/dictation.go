@@ -417,12 +417,16 @@ func dictationTTSHandler(ttsKey string) http.HandlerFunc {
 			http.Error(w, "missing text", http.StatusBadRequest)
 			return
 		}
+		// Optional; empty = English, exactly as before. Japanese tier words
+		// that ship without a local mp3 pass ?lang=ja.
+		lang := r.URL.Query().Get("lang")
+		cacheKey := ttsCacheKey(lang, text)
 
 		// 1. Check disk/memory cache
-		if cachedPath, ok := ttsCache.Load(text); ok {
+		if cachedPath, ok := ttsCache.Load(cacheKey); ok {
 			mp3Path := cachedPath.(string)
 			if data, err := os.ReadFile(mp3Path); err == nil {
-				log.Printf("[dictation tts cache hit] %s", text)
+				log.Printf("[dictation tts cache hit] %s", cacheKey)
 				w.Header().Set("Content-Type", "audio/mpeg")
 				w.Header().Set("Cache-Control", "public, max-age=86400")
 				w.Write(data)
@@ -431,7 +435,7 @@ func dictationTTSHandler(ttsKey string) http.HandlerFunc {
 		}
 
 		// 2. Synthesize via Google TTS API
-		audioBytes, err := synthesizeTTS(ttsKey, text)
+		audioBytes, err := synthesizeTTS(ttsKey, text, lang)
 		if err != nil {
 			log.Printf("[dictation tts error] %v", err)
 			http.Error(w, "TTS synthesis failed", http.StatusInternalServerError)
@@ -439,10 +443,10 @@ func dictationTTSHandler(ttsKey string) http.HandlerFunc {
 		}
 
 		// 3. Save to disk cache
-		mp3Path := saveTTSAudio(text, audioBytes)
+		mp3Path := saveTTSAudio(cacheKey, audioBytes)
 		if mp3Path != "" {
-			ttsCache.Store(text, mp3Path)
-			log.Printf("[dictation tts cached] %s → %s", text, mp3Path)
+			ttsCache.Store(cacheKey, mp3Path)
+			log.Printf("[dictation tts cached] %s → %s", cacheKey, mp3Path)
 		}
 
 		w.Header().Set("Content-Type", "audio/mpeg")

@@ -37,16 +37,50 @@ type ttsResponse struct {
 }
 
 // ---------------------------------------------------------------------------
-// Call Google Cloud TTS API  (en-AU-Standard-A, Australian female)
+// Voice selection.
+//
+// English is the default and stays exactly as it was (en-AU-Standard-A,
+// Australian female) — callers that pass an empty lang get the old behavior
+// byte for byte. "ja" was added for the Japanese 专业词 tiers, which ship
+// without pre-recorded mp3s and so need synthesis.
 // ---------------------------------------------------------------------------
 
-func synthesizeTTS(apiKey, text string) ([]byte, error) {
+type ttsVoice struct {
+	Code string
+	Name string
+}
+
+func ttsVoiceFor(lang string) ttsVoice {
+	switch lang {
+	case "ja", "ja-JP":
+		return ttsVoice{Code: "ja-JP", Name: "ja-JP-Standard-A"}
+	default:
+		return ttsVoice{Code: "en-AU", Name: "en-AU-Standard-A"}
+	}
+}
+
+// ttsCacheKey namespaces non-English audio so a Japanese clip can't collide
+// with an English one for the same text. English keeps the bare text as its
+// key, which keeps every already-cached English mp3 valid.
+func ttsCacheKey(lang, text string) string {
+	if v := ttsVoiceFor(lang); v.Code != "en-AU" {
+		return v.Code + ":" + text
+	}
+	return text
+}
+
+// ---------------------------------------------------------------------------
+// Call Google Cloud TTS API
+// ---------------------------------------------------------------------------
+
+func synthesizeTTS(apiKey, text, lang string) ([]byte, error) {
 	apiURL := "https://texttospeech.googleapis.com/v1/text:synthesize?key=" + apiKey
 
+	voice := ttsVoiceFor(lang)
 	req := ttsRequest{}
 	req.Input.Text = text
-	req.Voice.LanguageCode = "en-AU"
-	req.Voice.Name = "en-AU-Standard-A"
+	req.Voice.LanguageCode = voice.Code
+	req.Voice.Name = voice.Name
 	req.AudioConfig.AudioEncoding = "MP3"
 
 	jsonData, err := json.Marshal(req)
@@ -98,7 +132,7 @@ func playLocal(ttsKey, text string) {
 		}
 
 		// 2. Call TTS API
-		audioBytes, err := synthesizeTTS(ttsKey, text)
+		audioBytes, err := synthesizeTTS(ttsKey, text, "")
 		if err != nil {
 			log.Printf("[tts error] %v", err)
 			return
