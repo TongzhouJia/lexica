@@ -166,6 +166,8 @@ func main() {
 	http.HandleFunc("/japanese/kana-words", japaneseKanaWordsHandler())
 	http.HandleFunc("/japanese/categories", japaneseCategoriesHandler())
 	http.HandleFunc("/japanese/audio/", japaneseAudioHandler())
+	http.HandleFunc("/japanese/tiers", japaneseTiersHandler())
+	http.HandleFunc("/japanese/tier-words", japaneseTierWordsHandler())
 
 	// Bind on all interfaces by default so other machines on the LAN can
 	// reach the server via this host's IP. Override with LISTEN_ADDR

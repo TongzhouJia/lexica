@@ -45,17 +45,32 @@ let appLang = localStorage.getItem('lexica.lang') === 'ja' ? 'ja' : 'en';
 
 // `kana: true` → this category has a 五十音 (by-first-kana) index built from the
 // kanji readings, so its setup offers a 分卷 / 五十音 source toggle.
+// Priority tiers — the only study source for Japanese. Ids match the
+// directory names under data/japanese/tiers/ (see japanese_tiers.go), order
+// matches the sidebar tabs. Counts and per-tier notes come from
+// /japanese/tiers at runtime; this list is just the static tab wiring.
+const JAPANESE_TIERS = [
+  { id: '1_必会', label: '必会', short: '必会' },
+  { id: '2_普通掌握', label: '普通掌握', short: '普通' },
+  { id: '3_掌握最好', label: '掌握最好', short: '有余力' },
+  { id: '4_会不会都行', label: '会不会都行', short: '随意' },
+  { id: '5_别看', label: '浪费时间别看', short: '别看' },
+  { id: '6_DCO专业词', label: 'DCO专业词', short: 'DCO' },
+  { id: '7_JD点名词', label: 'JD点名词', short: 'JD' },
+];
+
+// The old 词形 categories are gone from navigation. This list survives only
+// because the 五十音 check-in board (a home-screen progress view, not a study
+// source) still groups its rows by them — see KANA_CATS further down.
 const JAPANESE_CATEGORIES = [
   { id: '1_全汉字词', label: '全汉字词', kana: true },
   { id: '4_平假名汉字混合词', label: '假名汉字混合词', kana: true },
-  { id: '2_全平假名词', label: '全平假名词' },
-  { id: '3_全片假名词', label: '全片假名词' },
 ];
 
-// Shared Japanese setup screen: a flat grid of the 4 word categories
-// (instead of the English "21 days" grid). onPicked(words, label) receives
-// the full category word list — same contract as the English day buttons —
-// so it plugs directly into each module's existing *ShowPortionPicker.
+// Shared Japanese setup screen: the priority tiers (instead of the English
+// "21 days" grid). onPicked(words, label) receives one tier part's words —
+// same contract as the English day buttons — so it plugs directly into each
+// module's existing *ShowPortionPicker.
 function renderJapaneseSetup(bodyEl, promptText, onPicked) {
   // Built with createElement (not innerHTML + id lookup) so this never
   // collides with the same-named setup screen in another panel — all four
@@ -70,9 +85,9 @@ function renderJapaneseSetup(bodyEl, promptText, onPicked) {
   label.textContent = promptText;
   wrap.appendChild(label);
 
-  const grid = document.createElement('div');
-  grid.className = 'dict-day-grid';
-  wrap.appendChild(grid);
+  const tierGrid = document.createElement('div');
+  tierGrid.className = 'dict-day-grid';
+  wrap.appendChild(tierGrid);
 
   const loadMsg = document.createElement('div');
   loadMsg.className = 'dict-loading';
@@ -80,26 +95,7 @@ function renderJapaneseSetup(bodyEl, promptText, onPicked) {
 
   bodyEl.appendChild(wrap);
 
-  JAPANESE_CATEGORIES.forEach(cat => {
-    const btn = document.createElement('button');
-    btn.className = 'dict-day-btn';
-    btn.style.minWidth = '96px';
-    btn.textContent = cat.label;
-    btn.addEventListener('click', async () => {
-      Array.from(grid.children).forEach(b => b.disabled = true);
-      loadMsg.textContent = `正在加载 ${cat.label} ...`;
-      try {
-        const res = await fetch(`${apiBase()}/japanese/words?category=${encodeURIComponent(cat.id)}`);
-        if (!res.ok) throw new Error(`加载失败: ${cat.label}`);
-        const words = await res.json();
-        onPicked(words, cat.label);
-      } catch (err) {
-        loadMsg.textContent = `❌ ${err.message}`;
-        Array.from(grid.children).forEach(b => b.disabled = false);
-      }
-    });
-    grid.appendChild(btn);
-  });
+  populateJaTiersGrid(tierGrid, loadMsg, onPicked);
 }
 
 const brandLogo = $('brand-logo');
@@ -141,8 +137,8 @@ function setAppLang(lang) {
   applyBackground(savedBackground());
   // Land on a clean home screen: close any open practice panel, drop the
   // active tab (the set of tabs differs per language), and clear the pending
-  // Japanese category so the user picks fresh.
-  jaActiveCategory = null;
+  // Japanese tier so the user picks fresh.
+  jaActiveTier = null;
   [dictPanel, learnPanel, recogPanel, studyPanel].forEach(p => p && p.classList.remove('visible'));
   setActiveTab(null);
   showSidebarContent(null);
@@ -1079,22 +1075,19 @@ tabLearn.addEventListener('click', () => openLearn());
 tabRecog.addEventListener('click', () => openRecognition());
 tabStudy.addEventListener('click', () => openStudy());
 
-// Japanese mode: the 4 category tabs each open the 新词 (learn) module,
-// drilling category → 分卷(part) → 范围(1/4·1/2·全部) → 学习.
-let jaActiveCategory = null;
-JAPANESE_CATEGORIES.forEach((cat, i) => {
-  const tab = $(`tab-ja-cat-${i}`);
-  if (tab) tab.addEventListener('click', () => openJapaneseCategory(cat, tab));
+// Japanese mode: the 7 tier tabs each open the 新词 (learn) module,
+// drilling tier → 分卷(100词一卷) → 范围(1/4·1/2·全部) → 学习.
+let jaActiveTier = null;
+JAPANESE_TIERS.forEach((tier, i) => {
+  const tab = $(`tab-ja-tier-${i}`);
+  if (tab) tab.addEventListener('click', () => openJapaneseTier(tier, tab));
 });
 
-// Brings the 学习 panel forward for a Japanese category without deciding what
-// to render into it. Shared by the sidebar tabs (which then show the setup
-// screen) and the 五十音 board's click-to-practice shortcut (which jumps
-// straight into a session).
-function focusLearnPanelForCategory(cat, tabBtn) {
-  jaActiveCategory = cat;
-  const idx = JAPANESE_CATEGORIES.indexOf(cat);
-  setActiveTab(tabBtn || $(`tab-ja-cat-${idx}`));
+// Brings the 学习 panel forward without deciding what to render into it.
+// `title` is whatever should show in the panel header — a tier label from the
+// sidebar, or "汉字 · あ" from the 五十音 board's click-to-practice shortcut.
+function focusLearnPanel(title, tabBtn) {
+  setActiveTab(tabBtn || null);
   showSidebarContent('learn');
   learnPanel.classList.add('visible');
   dictPanel.classList.remove('visible');
@@ -1102,13 +1095,14 @@ function focusLearnPanelForCategory(cat, tabBtn) {
   studyPanel.classList.remove('visible');
   exitTableNav();
   readerPanel.classList.remove('visible');
-  $('learn-title').textContent = cat.label;
+  $('learn-title').textContent = title;
 }
 
-function openJapaneseCategory(cat, tabBtn) {
-  focusLearnPanelForCategory(cat, tabBtn);
+function openJapaneseTier(tier, tabBtn) {
+  jaActiveTier = tier;
+  focusLearnPanel(tier.label, tabBtn);
   learnState.words = [];
-  learnShowJapaneseSetup(cat);
+  learnShowJapaneseTierSetup(tier);
 }
 
 dictCloseBtn.addEventListener('click', () => {
@@ -1245,10 +1239,10 @@ function openLearn() {
 // ---- Learn Setup Screen ----
 function learnShowSetup() {
   if (appLang === 'ja') {
-    if (jaActiveCategory) {
-      learnShowJapaneseSetup(jaActiveCategory);
+    if (jaActiveTier) {
+      learnShowJapaneseTierSetup(jaActiveTier);
     } else {
-      renderJapaneseSetup(learnBody, '学哪一类日语词？', (words, label) => learnShowPortionPicker(words, label));
+      renderJapaneseSetup(learnBody, '背哪一档？', (words, label) => learnShowPortionPicker(words, label));
     }
     return;
   }
@@ -1327,27 +1321,17 @@ function learnShowSetup() {
   });
 }
 
-// ---- Learn · Japanese category setup ----
-// Mirrors the English "21天 / 字母表" setup: a 分卷 (part CSV) source and, for
-// kanji categories, a 五十音 (by reading's first kana) source. Plus a 粘贴 CSV
-// option for one-off temporary study.
-function learnShowJapaneseSetup(cat) {
-  const hasKana = !!cat.kana;
+// ---- Learn · Japanese tier setup ----
+// One tier's 分卷 grid (100 words per 卷), plus the 粘贴 CSV escape hatch for
+// one-off lists. The old 词形 categories and their 分卷/五十音 pickers are gone:
+// they walked all 5805 words evenly, which is exactly the problem.
+function learnShowJapaneseTierSetup(tier) {
   learnBody.innerHTML = `
 <div class="dict-setup">
-  ${hasKana ? `<div class="dict-source-tabs">
-    <button class="dict-source-tab active" id="ja-tab-parts">分卷</button>
-    <button class="dict-source-tab" id="ja-tab-kana">五十音</button>
-  </div>` : ''}
-  <div id="ja-parts-panel">
-    <div class="dict-setup-label">${escapeHTML(cat.label)} · 选择分卷</div>
-    <div class="dict-day-grid" id="ja-parts-grid"></div>
-  </div>
-  <div id="ja-kana-panel" style="display:none">
-    <div class="dict-setup-label">${escapeHTML(cat.label)} · 选择五十音（按读音首字母）</div>
-    <div class="dict-day-grid ja-kana-grid" id="ja-kana-grid"></div>
-  </div>
+  <div class="dict-setup-label" id="ja-tier-heading">${escapeHTML(tier.label)} · 选择分卷</div>
+  <div class="dict-day-grid" id="ja-parts-grid"></div>
   <div class="setup-aux-row">
+    <button class="dict-back-btn" id="ja-all-tiers-btn">↔ 换一档</button>
     <button class="dict-back-btn" id="ja-paste-csv-btn">📋 粘贴 CSV</button>
   </div>
   <div class="dict-loading" id="ja-load-msg"></div>
@@ -1357,58 +1341,59 @@ function learnShowJapaneseSetup(cat) {
   const loadMsg = $('ja-load-msg');
 
   $('ja-paste-csv-btn').addEventListener('click', () => {
-    showJapanesePasteCSVScreen(learnBody, () => learnShowJapaneseSetup(cat),
+    showJapanesePasteCSVScreen(learnBody, () => learnShowJapaneseTierSetup(tier),
       (words, lbl) => learnShowPortionPicker(words, lbl));
   });
 
-  if (hasKana) {
-    const tabParts = $('ja-tab-parts');
-    const tabKana = $('ja-tab-kana');
-    const partsPanel = $('ja-parts-panel');
-    const kanaPanel = $('ja-kana-panel');
-    tabParts.addEventListener('click', () => {
-      tabParts.classList.add('active'); tabKana.classList.remove('active');
-      partsPanel.style.display = ''; kanaPanel.style.display = 'none';
-      loadMsg.textContent = '';
-    });
-    tabKana.addEventListener('click', () => {
-      tabKana.classList.add('active'); tabParts.classList.remove('active');
-      kanaPanel.style.display = ''; partsPanel.style.display = 'none';
-      loadMsg.textContent = '';
-      populateJaKanaGrid(cat, $('ja-kana-grid'), loadMsg);
-    });
-  }
+  $('ja-all-tiers-btn').addEventListener('click', () => {
+    jaActiveTier = null;
+    setActiveTab(null);
+    $('learn-title').textContent = '学习新词';
+    renderJapaneseSetup(learnBody, '背哪一档？',
+      (words, label) => learnShowPortionPicker(words, label));
+  });
 
-  populateJaPartsGrid(cat, $('ja-parts-grid'), loadMsg);
+  populateJaTierParts(tier, $('ja-parts-grid'), $('ja-tier-heading'), loadMsg,
+    (words, lbl) => learnShowPortionPicker(words, lbl));
 }
 
-// Fills the 分卷 grid from /japanese/parts. Each part → 范围 picker → 学习.
-async function populateJaPartsGrid(cat, grid, loadMsg) {
-  if (grid.dataset.loaded) return;
-  let parts;
+// Fills one tier's 分卷 grid from /japanese/tiers.
+async function populateJaTierParts(tier, grid, headingEl, loadMsg, onPicked) {
+  if (!grid) return;
+  let info;
   try {
-    const res = await fetch(`${apiBase()}/japanese/parts?category=${encodeURIComponent(cat.id)}`);
-    if (!res.ok) throw new Error(`加载分卷失败：${cat.label}`);
-    parts = await res.json();
+    const res = await fetch(`${apiBase()}/japanese/tiers`);
+    if (!res.ok) throw new Error('加载优先级失败');
+    const tiers = await res.json();
+    info = (tiers || []).find(t => t.id === tier.id);
   } catch (err) {
     loadMsg.textContent = `❌ ${err.message}`;
     return;
   }
-  grid.innerHTML = '';
-  grid.dataset.loaded = '1';
-  (parts || []).forEach(p => {
+  if (!info) {
+    loadMsg.textContent = `没有找到「${tier.label}」词表（先跑 scripts/build_tiers.py）`;
+    return;
+  }
+  if (headingEl) headingEl.textContent = `${info.label} · ${info.count} 词 · 选择分卷`;
+  renderJaTierPartButtons(info, grid, loadMsg, onPicked);
+}
+
+// Shared by the tier setup screen and the tier grid's drill-down: renders one
+// button per 分卷, each loading that part and handing it to onPicked.
+function renderJaTierPartButtons(info, grid, loadMsg, onPicked) {
+  (info.parts || []).forEach(p => {
     const btn = document.createElement('button');
     btn.className = 'dict-day-btn';
     btn.innerHTML = `<span>${escapeHTML(p.label)}</span>`;
     btn.title = `${p.count} 词`;
     btn.addEventListener('click', async () => {
       Array.from(grid.children).forEach(b => b.disabled = true);
-      loadMsg.textContent = `正在加载 分卷${p.label} …`;
+      loadMsg.textContent = `正在加载 ${info.label} · ${p.label} …`;
       try {
-        const res = await fetch(`${apiBase()}/japanese/words?category=${encodeURIComponent(cat.id)}&part=${encodeURIComponent(p.part)}`);
-        if (!res.ok) throw new Error(`加载失败：分卷${p.label}`);
+        const res = await fetch(`${apiBase()}/japanese/tier-words?tier=${encodeURIComponent(info.id)}&part=${encodeURIComponent(p.part)}`);
+        if (!res.ok) throw new Error(`加载失败：${info.label} ${p.label}`);
         const words = await res.json();
-        learnShowPortionPicker(words, `${cat.label} · 分卷${p.label}`);
+        onPicked(words, `${info.label} · ${p.label}`);
       } catch (err) {
         loadMsg.textContent = `❌ ${err.message}`;
         Array.from(grid.children).forEach(b => b.disabled = false);
@@ -1416,44 +1401,60 @@ async function populateJaPartsGrid(cat, grid, loadMsg) {
     });
     grid.appendChild(btn);
   });
-  if (!parts || !parts.length) loadMsg.textContent = '该类别下没有找到分卷文件';
+  if (!info.parts || !info.parts.length) loadMsg.textContent = '该档位下没有分卷';
 }
 
-// Fills the 五十音 grid from /japanese/kana-letters. Each kana → 范围 picker → 学习.
-async function populateJaKanaGrid(cat, grid, loadMsg) {
-  if (grid.dataset.loaded) return;
-  let letters;
+// ---- Japanese 优先级 source ----
+// Two-level drill inside one grid: tier → its part CSVs → caller's portion
+// picker. Rendering both levels into the same grid (rather than pushing a new
+// screen) keeps this a drop-in for the existing 分卷 flow.
+async function populateJaTiersGrid(grid, loadMsg, onPicked) {
+  if (!grid) return;
+  let tiers;
   try {
-    const res = await fetch(`${apiBase()}/japanese/kana-letters?category=${encodeURIComponent(cat.id)}`);
-    if (!res.ok) throw new Error('加载五十音失败');
-    letters = await res.json();
+    const res = await fetch(`${apiBase()}/japanese/tiers`);
+    if (!res.ok) throw new Error('加载优先级失败');
+    tiers = await res.json();
   } catch (err) {
     loadMsg.textContent = `❌ ${err.message}`;
     return;
   }
-  grid.innerHTML = '';
-  grid.dataset.loaded = '1';
-  (letters || []).forEach(l => {
-    const btn = document.createElement('button');
-    btn.className = 'dict-day-btn';
-    btn.textContent = l.kana;
-    btn.title = `${l.count} 词`;
-    btn.addEventListener('click', async () => {
-      Array.from(grid.children).forEach(b => b.disabled = true);
-      loadMsg.textContent = `正在加载 ${l.kana} …`;
-      try {
-        const res = await fetch(`${apiBase()}/japanese/kana-words?category=${encodeURIComponent(cat.id)}&kana=${encodeURIComponent(l.kana)}`);
-        if (!res.ok) throw new Error(`加载失败：${l.kana}`);
-        const words = await res.json();
-        learnShowPortionPicker(words, `${cat.label} · ${l.kana}`);
-      } catch (err) {
-        loadMsg.textContent = `❌ ${err.message}`;
-        Array.from(grid.children).forEach(b => b.disabled = false);
-      }
+  if (!tiers || !tiers.length) {
+    loadMsg.textContent = '没有找到优先级词表（先跑 scripts/build_tiers.py）';
+    return;
+  }
+
+  function renderTiers() {
+    grid.innerHTML = '';
+    grid.classList.add('ja-tier-grid');
+    tiers.forEach(t => {
+      const btn = document.createElement('button');
+      btn.className = 'dict-day-btn ja-tier-btn';
+      btn.innerHTML =
+        `<span class="ja-tier-label">${escapeHTML(t.label)}</span>` +
+        `<span class="ja-tier-count">${t.count} 词</span>` +
+        (t.note ? `<span class="ja-tier-note">${escapeHTML(t.note)}</span>` : '');
+      btn.addEventListener('click', () => renderParts(t));
+      grid.appendChild(btn);
     });
-    grid.appendChild(btn);
-  });
-  if (!letters || !letters.length) loadMsg.textContent = '该类别没有五十音索引';
+    loadMsg.textContent = '';
+  }
+
+  function renderParts(t) {
+    grid.innerHTML = '';
+    grid.classList.remove('ja-tier-grid');
+
+    const back = document.createElement('button');
+    back.className = 'dict-day-btn';
+    back.textContent = '← 返回';
+    back.addEventListener('click', renderTiers);
+    grid.appendChild(back);
+
+    renderJaTierPartButtons(t, grid, loadMsg, onPicked);
+    loadMsg.textContent = `${t.label} — ${t.note || ''}`;
+  }
+
+  renderTiers();
 }
 
 // splitCSVLine splits one CSV line into fields, honoring double-quoted fields
@@ -2090,7 +2091,7 @@ function showPasteCSVScreen(bodyEl, onBack, onLoaded) {
 // ---- Recognition Setup Screen ----
 function recogShowSetup() {
   if (appLang === 'ja') {
-    renderJapaneseSetup(recogBody, '认哪一类日语词？', (words, label) => recogShowPortionPicker(words, label));
+    renderJapaneseSetup(recogBody, '认哪一档？', (words, label) => recogShowPortionPicker(words, label));
     return;
   }
   recogBody.innerHTML = `
@@ -2558,7 +2559,7 @@ function openStudy() {
 function studyShowSetup() {
   studyBindKeys(null);
   if (appLang === 'ja') {
-    renderJapaneseSetup(studyBody, '学哪一类日语词？', (words, label) => studyShowPortionPicker(words, label));
+    renderJapaneseSetup(studyBody, '学哪一档？', (words, label) => studyShowPortionPicker(words, label));
     return;
   }
   studyBody.innerHTML = `
@@ -3124,31 +3125,47 @@ function dictStartSession(words, dayName, allWords, baseDayName) {
 }
 
 // ---- TTS cache (browser-side, populated by preload) ----
-// text → { url: blobURL, loading: Promise } so concurrent requests dedupe
+// key → { url: blobURL, loading: Promise } so concurrent requests dedupe.
+// Key is the bare text for English (unchanged) and "ja:<text>" for Japanese,
+// so the same string can't collide across languages.
 const ttsBlobCache = new Map();
 
-function ttsURLFor(text) {
-  return `${apiBase()}/dictation/tts?text=${encodeURIComponent(text)}`;
+// lang is optional everywhere below; empty = English, exactly as before.
+function ttsCacheKeyFor(text, lang) {
+  return lang ? `${lang}:${text}` : text;
+}
+
+function ttsURLFor(text, lang) {
+  const base = `${apiBase()}/dictation/tts?text=${encodeURIComponent(text)}`;
+  return lang ? `${base}&lang=${encodeURIComponent(lang)}` : base;
+}
+
+// ttsLangFor returns 'ja' for Japanese word objects, '' for English. Japanese
+// words always carry a `.kana` field (see JapaneseWord in japanese.go); the
+// 专业词 tiers are the ones that reach TTS, since they ship without mp3s.
+function ttsLangFor(word) {
+  return (word && word.kana) ? 'ja' : '';
 }
 
 // Fetches the MP3 once and stores a blob URL in ttsBlobCache. No-op if cached.
-function preloadTTS(text) {
+function preloadTTS(text, lang) {
   if (!text) return Promise.resolve(null);
-  const existing = ttsBlobCache.get(text);
+  const key = ttsCacheKeyFor(text, lang);
+  const existing = ttsBlobCache.get(key);
   if (existing) return existing.loading || Promise.resolve(existing.url);
 
   const entry = { url: null, loading: null };
-  ttsBlobCache.set(text, entry);
+  ttsBlobCache.set(key, entry);
   entry.loading = (async () => {
     try {
-      const res = await fetch(ttsURLFor(text));
+      const res = await fetch(ttsURLFor(text, lang));
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const blob = await res.blob();
       entry.url = URL.createObjectURL(blob);
       entry.loading = null;
       return entry.url;
     } catch (err) {
-      ttsBlobCache.delete(text);
+      ttsBlobCache.delete(key);
       console.warn('preload TTS failed:', text, err);
       return null;
     }
@@ -3156,41 +3173,45 @@ function preloadTTS(text) {
   return entry.loading;
 }
 
-// Preload an array of {english} entries with bounded concurrency.
-// Words that carry a local `.audio` file (Japanese) don't need TTS preloading.
+// Preload an array of word objects with bounded concurrency.
+// Words that carry a local `.audio` file (most Japanese) skip TTS entirely.
 async function preloadTTSBatch(words, concurrency = 4) {
   if (!words || !words.length) return;
-  const queue = words.filter(w => w.english && !w.audio).map(w => w.english);
+  const queue = words
+    .filter(w => w.english && !w.audio)
+    .map(w => ({ text: w.english, lang: ttsLangFor(w) }));
   let idx = 0;
   async function worker() {
     while (idx < queue.length) {
       const i = idx++;
-      await preloadTTS(queue[i]);
+      await preloadTTS(queue[i].text, queue[i].lang);
     }
   }
   await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker));
 }
 
-function dictPlayTTS(text) {
-  const cached = ttsBlobCache.get(text);
-  const src = (cached && cached.url) ? cached.url : ttsURLFor(text);
+function dictPlayTTS(text, lang) {
+  const key = ttsCacheKeyFor(text, lang);
+  const cached = ttsBlobCache.get(key);
+  const src = (cached && cached.url) ? cached.url : ttsURLFor(text, lang);
   const audio = new Audio(src);
   audio.play().catch(err => console.warn('TTS play failed:', err));
   // Kick off preload if not in cache so future plays are instant
-  if (!cached) preloadTTS(text);
+  if (!cached) preloadTTS(text, lang);
   return audio;
 }
 
 // Plays a word's pronunciation. Japanese word objects carry a `.audio`
 // filename pointing at a local pre-recorded mp3 (served from
-// /japanese/audio/); everything else falls back to on-the-fly Google TTS.
+// /japanese/audio/); everything else falls back to on-the-fly Google TTS —
+// in Japanese for the 专业词 tiers, English for the dictation module.
 function playWordAudio(word) {
   if (word && word.audio) {
     const audio = new Audio(`${apiBase()}/japanese/audio/${encodeURIComponent(word.audio)}`);
     audio.play().catch(err => console.warn('audio play failed:', err));
     return audio;
   }
-  return dictPlayTTS(word ? word.english : '');
+  return dictPlayTTS(word ? word.english : '', ttsLangFor(word));
 }
 
 // ---- Question Screen ----
@@ -4332,8 +4353,11 @@ async function startKanaPractice(catId, kana, btnEl) {
     const words = await res.json();
     if (!words || !words.length) throw new Error(`${kana} 下没有词`);
     setLearnReverse(false); // 这个入口固定走正向：显示日语、盖住中文
-    focusLearnPanelForCategory(cat);
     const label = `${cat.label} · ${kana}`;
+    // No sidebar tab to highlight — this entry point isn't one of the tier
+    // tabs — so pass none and let the panel header carry the label.
+    jaActiveTier = null;
+    focusLearnPanel(label);
     learnStartSession(words, label, words, label);
   } catch (err) {
     flash(`❌ ${err.message}`, true);

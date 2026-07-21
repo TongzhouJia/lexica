@@ -83,11 +83,16 @@
         <button class="sidebar-tab en-only" id="tab-study" title="学词·中英文同时显示 · 空格/回车下一个">
           <span class="tab-icon">🔖</span>学词
         </button>
-        <!-- Japanese mode tabs: the 4 word categories, labelled in Japanese -->
-        <button class="sidebar-tab ja-only" id="tab-ja-cat-0" title="全汉字词 · 分卷选择">漢字</button>
-        <button class="sidebar-tab ja-only" id="tab-ja-cat-1" title="假名汉字混合词 · 分卷选择">かな漢字</button>
-        <button class="sidebar-tab ja-only" id="tab-ja-cat-2" title="全平假名词 · 分卷选择">ひらがな</button>
-        <button class="sidebar-tab ja-only" id="tab-ja-cat-3" title="全片假名词 · 分卷选择">カタカナ</button>
+        <!-- Japanese mode tabs: the 7 priority tiers, most valuable first.
+             Replaces the old 词形 categories (漢字/かな漢字/ひらがな/カタカナ),
+             which spread study evenly over all 5805 words. -->
+        <button class="sidebar-tab ja-only" id="tab-ja-tier-0" title="必会 · 第1册基础词，不会就听不懂问题">必会</button>
+        <button class="sidebar-tab ja-only" id="tab-ja-tier-1" title="普通掌握 · 第2册核心，商务与抽象词">普通</button>
+        <button class="sidebar-tab ja-only" id="tab-ja-tier-2" title="掌握最好 · 有余力再背">有余力</button>
+        <button class="sidebar-tab ja-only" id="tab-ja-tier-3" title="会不会都行 · 不影响面试结果">随意</button>
+        <button class="sidebar-tab ja-only" id="tab-ja-tier-4" title="浪费时间别看 · 人名地名·剧情词，建议直接跳过">别看</button>
+        <button class="sidebar-tab ja-only" id="tab-ja-tier-5" title="DCO专业词 · 书里没有，岗位现场用语">DCO</button>
+        <button class="sidebar-tab ja-only" id="tab-ja-tier-6" title="JD点名词 · 变更管理·维护窗口·工单流程">JD</button>
       </div>
 
       <!-- Home-screen background picker -->
