@@ -959,6 +959,34 @@ async function saveToMistakeBook() {
 
 saveBtn.addEventListener('click', saveToMistakeBook);
 
+// Saves a study-panel word/sentence object (from the learn / 例句 flow) to the
+// 错题本 — the A shortcut, mirroring the selection popup's ✚. The backend's
+// vocabularyEntry swaps columns unless sl starts with "en", so we feed it such
+// that the stored row is always (foreign, 中文) = (word.english, word.chinese).
+async function saveStudyWordToMistakeBook(word) {
+  if (!word || !word.english) return;
+  const isJA = appLang === 'ja';
+  const text = isJA ? word.chinese : word.english;
+  const translated = isJA ? word.english : word.chinese;
+  const sl = isJA ? 'ja' : 'en';
+  if (!text || !translated) { flash('缺少中文/原文，无法加入错题本', true); return; }
+
+  const url = `${apiBase()}/mistakes/save?text=${encodeURIComponent(text)}` +
+    `&translated=${encodeURIComponent(translated)}&sl=${sl}`;
+  try {
+    const res = await fetch(url);
+    const txt = (await res.text()).trim();
+    flash(txt === 'exists' ? '已在今日错题本' : '已加入错题本 ✓');
+  } catch (err) {
+    try {
+      await fetch(url, { mode: 'no-cors' });
+      flash('已发送 (无 CORS 头, 无法确认结果)');
+    } catch (e2) {
+      flash('保存失败: ' + e2.message, true);
+    }
+  }
+}
+
 function flash(msg, isError) {
   const el = document.createElement('div');
   el.className = 'flash' + (isError ? ' error' : '');
@@ -1103,6 +1131,36 @@ function openJapaneseTier(tier, tabBtn) {
   focusLearnPanel(tier.label, tabBtn);
   learnState.words = [];
   learnShowJapaneseTierSetup(tier);
+}
+
+// 例句 tab: reuses the 新词 (learn) panel, but studies whole sentences instead
+// of single words. Each row carries english=日文例句 / kana=假名 / chinese=中文
+// (see japanese_sentences.go), so the learn renderer and ja-JP TTS fallback
+// work unchanged. Only one set today, so this loads it straight into the
+// portion picker; if more sentence CSVs get added later, swap this for a set
+// picker over /japanese/sentence-sets.
+const tabJaSentences = $('tab-ja-sentences');
+if (tabJaSentences) {
+  tabJaSentences.addEventListener('click', () => openJapaneseSentences(tabJaSentences));
+}
+
+async function openJapaneseSentences(tabBtn) {
+  jaActiveTier = null;
+  focusLearnPanel('例句', tabBtn);
+  learnState.words = [];
+  learnBody.innerHTML = '<div class="dict-loading">正在加载例句 …</div>';
+  try {
+    const res = await fetch(`${apiBase()}/japanese/sentence-words`);
+    if (!res.ok) throw new Error('加载例句失败');
+    const words = await res.json();
+    if (!words || !words.length) {
+      learnBody.innerHTML = '<div class="dict-loading">没有找到例句（把 CSV 放到 data/japanese/sentences/）</div>';
+      return;
+    }
+    learnShowPortionPicker(words, '例句');
+  } catch (err) {
+    learnBody.innerHTML = `<div class="dict-loading">❌ ${escapeHTML(err.message)}</div>`;
+  }
 }
 
 dictCloseBtn.addEventListener('click', () => {
@@ -1654,9 +1712,9 @@ function learnShowQuestion() {
   const rHint = canKana ? 'R=重听 · F=假名' : 'R=重听';
   // 正向进入即朗读，所以一开始就能提示 R；反向要等揭晓后才有音。
   const hintBefore = rev
-    ? '回车=认识 · 空格=不认识 · Esc=提前退出'
-    : `回车=认识 · 空格=不认识 · ${rHint} · Esc=提前退出`;
-  const hintAfter = `回车=认对 · 空格=认错 · ${rHint} · Esc=提前退出`;
+    ? '回车=认识 · 空格=不认识 · A=错题本 · Esc=提前退出'
+    : `回车=认识 · 空格=不认识 · ${rHint} · A=错题本 · Esc=提前退出`;
+  const hintAfter = `回车=认对 · 空格=认错 · ${rHint} · A=错题本 · Esc=提前退出`;
   const L = learnDirLabels();
 
   const promptHTML = rev
@@ -1799,6 +1857,9 @@ function learnShowQuestion() {
       e.preventDefault();
       // 反向模式揭晓前不能翻假名——那也是答案。
       if (toggleKana && !(rev && !revealed)) toggleKana();
+    } else if (e.key === 'a' || e.key === 'A') {
+      e.preventDefault();
+      saveStudyWordToMistakeBook(word);
     } else if (e.key === 'Escape') {
       e.preventDefault();
       earlyExit();
@@ -1942,6 +2003,11 @@ function endRecogDrag(e) {
 recogHeader.addEventListener('pointerup', endRecogDrag);
 recogHeader.addEventListener('pointercancel', endRecogDrag);
 
+// When false, recogShowQuestion skips the entry auto-play — used by the
+// Japanese 发音 (pronunciation-test) flow so you read the word yourself first.
+// Every normal recognition entry resets it to true.
+let recogAutoPlay = true;
+
 function openRecognition() {
   setActiveTab(tabRecog);
   showSidebarContent('recog');
@@ -1951,10 +2017,35 @@ function openRecognition() {
   studyPanel.classList.remove('visible');
   exitTableNav();
   readerPanel.classList.remove('visible');
+  recogAutoPlay = true;
   $('recog-title').textContent = '认词模式';
   if (!recogState.words.length) {
     recogShowSetup();
   }
+}
+
+// Japanese 发音 tab: the recognition module fed by a pasted CSV, but with
+// auto-play off so you can say each word yourself and then press 🔊/R to check.
+// Clicking the tab drops you straight onto the paste screen.
+const tabJaRecogPaste = $('tab-ja-recog-paste');
+if (tabJaRecogPaste) {
+  tabJaRecogPaste.addEventListener('click', () => openJapaneseRecogPaste(tabJaRecogPaste));
+}
+
+function openJapaneseRecogPaste(tabBtn) {
+  setActiveTab(tabBtn);
+  showSidebarContent('recog');
+  recogPanel.classList.add('visible');
+  dictPanel.classList.remove('visible');
+  learnPanel.classList.remove('visible');
+  studyPanel.classList.remove('visible');
+  exitTableNav();
+  readerPanel.classList.remove('visible');
+  recogAutoPlay = false; // 不自动朗读，先自己读
+  recogState.words = [];
+  $('recog-title').textContent = '发音 · 认词（不自动朗读）';
+  showJapanesePasteCSVScreen(recogBody, () => openJapaneseRecogPaste(tabBtn),
+    (words, label) => recogShowPortionPicker(words, label));
 }
 
 // ---- CSV-path loading helpers (shared by recognition + dictation) ----
@@ -2293,7 +2384,9 @@ function recogShowQuestion() {
 </div>
   `;
 
-  playWordAudio(word);
+  // 发音测试模式（日语·粘贴 CSV）进卡片时不自动朗读，让你先自己读，
+  // 再按 🔊/R 对照。其余认词流程一律进入即朗读。
+  if (recogAutoPlay) playWordAudio(word);
 
   const toggleKana = makeKanaToggler(word, 'recog-english');
   function replay() {
