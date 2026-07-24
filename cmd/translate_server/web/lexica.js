@@ -916,6 +916,9 @@ document.addEventListener('keydown', (e) => {
   } else if ((e.key === 'a' || e.key === 'A') && !isEditableTarget(e.target) && !e.metaKey && !e.ctrlKey && !e.altKey) {
     e.preventDefault();
     saveToMistakeBook();
+  } else if ((e.key === 'c' || e.key === 'C') && !isEditableTarget(e.target) && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    e.preventDefault();
+    copyWordToClipboard(currentWord);
   }
 });
 
@@ -984,6 +987,52 @@ async function saveStudyWordToMistakeBook(word) {
     } catch (e2) {
       flash('保存失败: ' + e2.message, true);
     }
+  }
+}
+
+function copyWordToClipboard(word) {
+  let text = '';
+  if (typeof word === 'string') {
+    text = word;
+  } else if (word && typeof word === 'object') {
+    text = word.english || word.text || '';
+  }
+  text = text.trim();
+  if (!text) {
+    flash('无可复制内容', true);
+    return;
+  }
+
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(() => {
+      flash(`已复制: ${text}`);
+    }).catch(() => {
+      fallbackCopyText(text);
+    });
+  } else {
+    fallbackCopyText(text);
+  }
+}
+
+function fallbackCopyText(text) {
+  try {
+    const input = document.createElement('textarea');
+    input.value = text;
+    input.style.position = 'fixed';
+    input.style.left = '-9999px';
+    input.style.top = '-9999px';
+    document.body.appendChild(input);
+    input.focus();
+    input.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(input);
+    if (ok) {
+      flash(`已复制: ${text}`);
+    } else {
+      flash('复制失败', true);
+    }
+  } catch (e) {
+    flash('复制失败', true);
   }
 }
 
@@ -1712,9 +1761,9 @@ function learnShowQuestion() {
   const rHint = canKana ? 'R=重听 · F=假名' : 'R=重听';
   // 正向进入即朗读，所以一开始就能提示 R；反向要等揭晓后才有音。
   const hintBefore = rev
-    ? '回车=认识 · 空格=不认识 · A=错题本 · Esc=提前退出'
-    : `回车=认识 · 空格=不认识 · ${rHint} · A=错题本 · Esc=提前退出`;
-  const hintAfter = `回车=认对 · 空格=认错 · ${rHint} · A=错题本 · Esc=提前退出`;
+    ? '回车=认识 · 空格=不认识 · A=错题本 · C=复制 · Esc=提前退出'
+    : `回车=认识 · 空格=不认识 · ${rHint} · A=错题本 · C=复制 · Esc=提前退出`;
+  const hintAfter = `回车=认对 · 空格=认错 · ${rHint} · A=错题本 · C=复制 · Esc=提前退出`;
   const L = learnDirLabels();
 
   const promptHTML = rev
@@ -1860,6 +1909,9 @@ function learnShowQuestion() {
     } else if (e.key === 'a' || e.key === 'A') {
       e.preventDefault();
       saveStudyWordToMistakeBook(word);
+    } else if (e.key === 'c' || e.key === 'C') {
+      e.preventDefault();
+      copyWordToClipboard(word);
     } else if (e.key === 'Escape') {
       e.preventDefault();
       earlyExit();
@@ -2379,7 +2431,7 @@ function recogShowQuestion() {
     <button class="recog-no-btn" id="recog-no-btn">✗</button>
     <button class="recog-yes-btn" id="recog-yes-btn">✓</button>
   </div>
-  <div class="recog-hint" id="recog-hint">回车=认识 · 空格=不认识 · ${rHint} · Esc=提前退出</div>
+  <div class="recog-hint" id="recog-hint">回车=认识 · 空格=不认识 · ${rHint} · A=错题本 · C=复制 · Esc=提前退出</div>
   <button class="recog-exit-btn" id="recog-exit-btn">⏏ 提前退出</button>
 </div>
   `;
@@ -2415,7 +2467,7 @@ function recogShowQuestion() {
     `;
     $('recog-right-btn').addEventListener('click', () => grade(true));
     $('recog-wrong-btn').addEventListener('click', () => grade(false));
-    hintEl.textContent = `回车=认对 · 空格=认错 · ${rHint} · Esc=提前退出`;
+    hintEl.textContent = `回车=认对 · 空格=认错 · ${rHint} · A=错题本 · C=复制 · Esc=提前退出`;
   }
 
   function grade(gotRight) {
@@ -2478,6 +2530,12 @@ function recogShowQuestion() {
     } else if (e.key === 'f' || e.key === 'F') {
       e.preventDefault();
       if (toggleKana) toggleKana();
+    } else if (e.key === 'a' || e.key === 'A') {
+      e.preventDefault();
+      saveStudyWordToMistakeBook(word);
+    } else if (e.key === 'c' || e.key === 'C') {
+      e.preventDefault();
+      copyWordToClipboard(word);
     } else if (e.key === 'Escape') {
       e.preventDefault();
       earlyExit();
@@ -2838,7 +2896,7 @@ function studyShowCard() {
     <button class="recog-no-btn" id="study-no-btn">✗ 不认识</button>
     <button class="recog-yes-btn" id="study-yes-btn">✓ 认识</button>
   </div>
-  <div class="recog-hint">回车 = 认识 · 空格 = 不认识 · ${rHint} · Esc = 退出</div>
+  <div class="recog-hint">回车 = 认识 · 空格 = 不认识 · ${rHint} · A = 错题本 · C = 复制 · Esc = 退出</div>
   <button class="recog-exit-btn" id="study-exit-btn">⏏ 退出</button>
 </div>
   `;
@@ -2884,6 +2942,12 @@ function studyShowCard() {
     } else if (e.key === 'f' || e.key === 'F') {
       e.preventDefault();
       if (toggleKana) toggleKana();
+    } else if (e.key === 'a' || e.key === 'A') {
+      e.preventDefault();
+      saveStudyWordToMistakeBook(word);
+    } else if (e.key === 'c' || e.key === 'C') {
+      e.preventDefault();
+      copyWordToClipboard(word);
     } else if (e.key === 'Escape') {
       e.preventDefault();
       earlyExit();
@@ -3374,12 +3438,22 @@ function dictShowQuestion() {
   if (isAdv) playWordAudio(word);
 
   answerInput.addEventListener('keydown', (e) => {
-    // On the "✅ 回答正确" screen the input is read-only, so R safely replays
-    // the audio without clashing with typing.
-    if (awaitingNextEnter && (e.key === 'r' || e.key === 'R')) {
-      e.preventDefault();
-      playWordAudio(word);
-      return;
+    // On the "✅ 回答正确" screen the input is read-only, so R/A/C safely replays/saves/copies
+    // without clashing with typing.
+    if (awaitingNextEnter && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      if (e.key === 'r' || e.key === 'R') {
+        e.preventDefault();
+        playWordAudio(word);
+        return;
+      } else if (e.key === 'a' || e.key === 'A') {
+        e.preventDefault();
+        saveStudyWordToMistakeBook(word);
+        return;
+      } else if (e.key === 'c' || e.key === 'C') {
+        e.preventDefault();
+        copyWordToClipboard(word);
+        return;
+      }
     }
 
     if (e.key !== 'Enter') return;
@@ -3539,7 +3613,7 @@ function dictShowQuestionUltimate() {
     revealEl.innerHTML = `<span class="dict-word-en">${escapeHTML(word.english)}</span> — <span class="recog-chinese-reveal">${escapeHTML(word.chinese)}</span>`;
     feedbackEl.textContent = typedAnswer ? `你的答案：${typedAnswer}` : '（未作答）';
     feedbackEl.className = 'dict-feedback';
-    hintEl.textContent = '空格=记错了 · 回车=记对了 · R=重听';
+    hintEl.textContent = '空格=记错了 · 回车=记对了 · R=重听 · A=错题本 · C=复制';
     gradeRow.style.display = '';
   }
 
@@ -3575,9 +3649,13 @@ function dictShowQuestionUltimate() {
       return;
     }
     // Grading phase: the input is read-only, so these keys are safe.
-    if (e.key === 'Enter') { e.preventDefault(); grade(true); }
-    else if (e.key === ' ') { e.preventDefault(); grade(false); }
-    else if (e.key === 'r' || e.key === 'R') { e.preventDefault(); playWordAudio(word); }
+    if (!e.metaKey && !e.ctrlKey && !e.altKey) {
+      if (e.key === 'Enter') { e.preventDefault(); grade(true); }
+      else if (e.key === ' ') { e.preventDefault(); grade(false); }
+      else if (e.key === 'r' || e.key === 'R') { e.preventDefault(); playWordAudio(word); }
+      else if (e.key === 'a' || e.key === 'A') { e.preventDefault(); saveStudyWordToMistakeBook(word); }
+      else if (e.key === 'c' || e.key === 'C') { e.preventDefault(); copyWordToClipboard(word); }
+    }
   });
 
   $('dict-right-btn').addEventListener('click', () => grade(true));
