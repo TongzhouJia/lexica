@@ -26,7 +26,9 @@
 python3 scripts/build_tiers.py [分级词表目录]
 ```
 
-默认读 `/Users/jiatongzhou/Downloads/新标日单词/分级词表`。
+源目录按 `TIERS_SRC` 环境变量 → 命令行参数 → `~/新标日单词/分级词表` 的顺序取。
+**注意：这棵源目录树没从 Mac 搬过来**，`data/japanese/tiers/` 下已生成的 CSV 还在，
+所以只有要重新生成时才需要先把源词表找回来。
 输出到 `data/japanese/tiers/<档位>/<档位>_partN.csv`，每卷 100 词。
 
 ⚠️ `data/` 在 .gitignore 里，所以词表文件**不进版本控制**——换机器或清空后跑一次这个脚本即可。

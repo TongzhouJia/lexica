@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 )
 
 // ---------------------------------------------------------------------------
@@ -116,7 +117,40 @@ func synthesizeTTS(apiKey, text, lang string) ([]byte, error) {
 }
 
 // ---------------------------------------------------------------------------
-// playLocal – get or synthesize TTS, play via afplay (non-blocking goroutine)
+// localPlayer – resolve a command-line audio player for the host.
+// Was hardcoded to macOS `afplay`; on Linux we prefer mpv, then ffplay.
+// Override with AUDIO_PLAYER=<binary> (the file path is appended as the only arg).
+// ---------------------------------------------------------------------------
+
+func localPlayer(mp3Path string) *exec.Cmd {
+	if bin := strings.TrimSpace(os.Getenv("AUDIO_PLAYER")); bin != "" {
+		return exec.Command(bin, mp3Path)
+	}
+	if bin, err := exec.LookPath("mpv"); err == nil {
+		return exec.Command(bin, "--no-video", "--really-quiet", mp3Path)
+	}
+	if bin, err := exec.LookPath("ffplay"); err == nil {
+		return exec.Command(bin, "-nodisp", "-autoexit", "-loglevel", "error", mp3Path)
+	}
+	if bin, err := exec.LookPath("afplay"); err == nil { // macOS fallback
+		return exec.Command(bin, mp3Path)
+	}
+	return nil
+}
+
+func playFile(mp3Path string) {
+	cmd := localPlayer(mp3Path)
+	if cmd == nil {
+		log.Printf("[tts error] no audio player found (install ffplay or mpv, or set AUDIO_PLAYER)")
+		return
+	}
+	if err := cmd.Run(); err != nil {
+		log.Printf("[tts play error] %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// playLocal – get or synthesize TTS, play locally (non-blocking goroutine)
 // ---------------------------------------------------------------------------
 
 func playLocal(ttsKey, text string) {
@@ -126,7 +160,7 @@ func playLocal(ttsKey, text string) {
 			mp3Path := cachedPath.(string)
 			if _, err := os.Stat(mp3Path); err == nil {
 				log.Printf("[tts disk hit] %s", text)
-				exec.Command("afplay", mp3Path).Run()
+				playFile(mp3Path)
 				return
 			}
 		}
@@ -143,13 +177,13 @@ func playLocal(ttsKey, text string) {
 		if mp3Path != "" {
 			ttsCache.Store(text, mp3Path)
 			log.Printf("[tts cached] %s → %s", text, mp3Path)
-			exec.Command("afplay", mp3Path).Run()
+			playFile(mp3Path)
 		}
 	}()
 }
 
 // ---------------------------------------------------------------------------
-// Play handler – GET /play?text=hello → triggers local afplay
+// Play handler – GET /play?text=hello → triggers local playback
 // ---------------------------------------------------------------------------
 
 func playHandler(ttsKey string) http.HandlerFunc {

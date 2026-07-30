@@ -17,7 +17,10 @@ import csv, os, sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_ROOT = os.path.join(REPO, 'data', 'japanese', 'tiers')
-DEFAULT_SRC = '/Users/jiatongzhou/Downloads/新标日单词/分级词表'
+# 原来写死在 Mac 的 ~/Downloads 下；那棵目录树没跟着搬过来。
+# 现在优先读环境变量 TIERS_SRC，其次是主目录下的 新标日单词/分级词表。
+DEFAULT_SRC = os.environ.get('TIERS_SRC') or os.path.join(
+    os.path.expanduser('~'), '新标日单词', '分级词表')
 PART_SIZE = 100          # 每个 partN 的词数，和分卷的手感保持一致
 HEADER = ['日文(汉字)', '假名读音', '中文释义', '音频文件']
 

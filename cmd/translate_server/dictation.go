@@ -301,9 +301,10 @@ func dictationUpdateWordHandler() http.HandlerFunc {
 			return
 		}
 
-		// Best-effort local .txt rewrite (LingoCleaner source)
+		// Best-effort local .txt rewrite (LingoCleaner source); skipped unless
+		// LINGO_BASE_DIR is configured — see lingo.go.
 		localPath := filepath.Join(lingoBaseDir, "daily_english_word", req.Day+".txt")
-		if data, err := os.ReadFile(localPath); err == nil {
+		if data, err := os.ReadFile(localPath); err == nil && lingoBaseDir != "" {
 			lines := strings.Split(string(data), "\n")
 			for i, line := range lines {
 				fields := strings.Fields(line)

@@ -16,7 +16,12 @@ import (
 // LingoCleaner Handler
 // ---------------------------------------------------------------------------
 
-const lingoBaseDir = "/Users/jiatongzhou/Public/Drop Box/学外语"
+// lingoBaseDir is the root of the "学外语" tree that /clean prunes words from.
+// It used to be hardcoded to a macOS Dropbox path; that tree did not survive the
+// move off the Mac, so it is now configured with LINGO_BASE_DIR. When unset the
+// local-file half of /clean is skipped and only the GCS side runs.
+var lingoBaseDir = strings.TrimSpace(os.Getenv("LINGO_BASE_DIR"))
+
 const lingoGcsDailyWordPrefix = "study-english/vocabulary-list/daily_english_word/"
 
 func removeFromTxt(filePath string, targetWord string) bool {
@@ -70,6 +75,12 @@ func cleanHandler() http.HandlerFunc {
 				continue
 			}
 			firstLetter := string(word[0])
+
+			// Local-file cleanup only runs when LINGO_BASE_DIR points somewhere;
+			// otherwise a bare filepath.Join would resolve against the CWD.
+			if lingoBaseDir == "" {
+				continue
+			}
 
 			// 1. alphabet_order_word
 			removeFromTxt(filepath.Join(lingoBaseDir, "alphabet_order_word", firstLetter+".txt"), word)
